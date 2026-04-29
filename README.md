@@ -163,7 +163,26 @@ You should see five steps complete in ~45 s:
 That's the full story: announce → discover → delegate by capability →
 respond → audit-fetch.
 
-### 4. Plug in a real coding agent
+### 4. (Optional) Run the same demo in containers
+
+For the security story (Goose runs LLM-suggested shell commands; you
+probably don't want them with full access to your home dir):
+
+```bash
+make demo-containerized
+```
+
+Each agent runs as non-root inside its own debian-trixie-slim
+container with no host filesystem access except a scoped data volume.
+Goose-suggested file edits and shell commands are bounded by the
+container — your `~/.ssh`, `/etc`, etc. are unreachable. Same fleet,
+same logos.dev mesh, same five-step narrative; the host CLI drives
+each container's daemon over a Unix-socket volume mount.
+
+First run builds the image (~15-20 min: Nim + Rust + Goose); cached
+runs finish in ~1 min. See `Dockerfile` + `docker-compose.yml`.
+
+### 5. Plug in a real coding agent
 
 The demo defaults to `sed` so it works without a model. Swap in
 [Goose](https://goose-docs.ai) + Ollama:
