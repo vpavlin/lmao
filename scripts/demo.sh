@@ -75,16 +75,28 @@ else
 fi
 
 run_agent_bg() {
-  local name="$1" caps="$2" tcp="$3" udp="$4" keyfile="$5" logfile="$6"
+  local name="$1" caps="$2" tcp="$3" udp="$4" keyfile="$5" logfile="$6" exec_cmd="$7"
   echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp)..."
   "$BIN" \
     --transport logos-delivery \
     --keyfile "$keyfile" \
     --tcp-port "$tcp" --udp-port "$udp" \
-    agent run --name "$name" --capabilities "$caps" \
+    agent run --name "$name" --capabilities "$caps" --exec "$exec_cmd" \
     >"$logfile" 2>&1 &
   echo "$!" >>"$PIDFILE"
 }
+
+# Default executors: simple sed-based stubs that prefix the task text so
+# different agents produce visibly different responses. Swap in a real
+# coding agent (e.g. Goose against a local Ollama model) by exporting:
+#
+#   export LMAO_DEMO_ALICE_EXEC='goose run --no-session -i - --output-format text --quiet'
+#   export LMAO_DEMO_BOB_EXEC='goose run --no-session -i - --output-format text --quiet'
+#
+# These recipes assume `~/.config/goose/config.yaml` is configured for an
+# Ollama provider and a model that's already pulled locally.
+ALICE_EXEC="${LMAO_DEMO_ALICE_EXEC:-sed 's/^/[summarized] /'}"
+BOB_EXEC="${LMAO_DEMO_BOB_EXEC:-sed 's/^/[reviewed]   /'}"
 
 wait_for_pubkey() {
   local logfile="$1" deadline="$2"
@@ -110,8 +122,8 @@ echo
 echo "═══ LMAO demo on logos.dev ═══"
 echo
 echo "[1/4] starting two agents (persistent identities)…"
-run_agent_bg alice "text,summarize"  60010 9010 "$ALICE_KEYFILE" "$ALICE_LOG"
-run_agent_bg bob   "code,review"     60011 9011 "$BOB_KEYFILE"   "$BOB_LOG"
+run_agent_bg alice "text,summarize" 60010 9010 "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
+run_agent_bg bob   "code,review"    60011 9011 "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
 
 echo
 echo "[2/4] waiting for each to connect to logos.dev and announce…"

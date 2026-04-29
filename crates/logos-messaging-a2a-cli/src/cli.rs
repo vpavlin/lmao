@@ -126,6 +126,22 @@ pub enum AgentAction {
         /// Comma-separated capabilities
         #[arg(long, default_value = "text")]
         capabilities: String,
+        /// Shell command to execute for each incoming task. The task text
+        /// is written to the command's stdin. The command's stdout (after
+        /// trim) is sent back as the response. Stderr is captured as the
+        /// "audit log" (and uploaded to Logos Storage if configured).
+        ///
+        /// Default: invoke Goose against a local OpenAI-compatible endpoint
+        /// (e.g. Ollama) configured via the user's `~/.config/goose`
+        /// profile or `GOOSE_PROVIDER` / `GOOSE_MODEL` env vars.
+        ///
+        /// Use `echo` for a stub that just echoes back the task — handy
+        /// for plumbing tests without a model running.
+        #[arg(
+            long,
+            default_value = "goose run --no-session -i - --output-format text --quiet"
+        )]
+        exec: String,
     },
     /// Discover agents on the network
     Discover,
@@ -530,7 +546,7 @@ mod tests {
         let cli = try_parse(&["cli", "agent", "run", "--name", "echo"]).unwrap();
         match cli.command {
             Commands::Agent {
-                action: AgentAction::Run { name, capabilities },
+                action: AgentAction::Run { name, capabilities, .. },
             } => {
                 assert_eq!(name, "echo");
                 assert_eq!(capabilities, "text");

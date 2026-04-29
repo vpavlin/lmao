@@ -1,10 +1,71 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use logos_messaging_a2a_transport::Transport;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 use crate::cli::AgentAction;
 use crate::common::{build_node, parse_capabilities, IdentityConfig};
+
+/// Output of an executor invocation: trimmed stdout (the response sent
+/// back over LMAO) and full stderr (the audit log, retained for upload
+/// to Logos Storage when configured).
+struct ExecOutput {
+    response: String,
+    log: String,
+}
+
+/// Run the user's `--exec` command with the task text on stdin.
+///
+/// The command runs through `sh -c` so quoting and pipes work the way the
+/// user wrote them. stdout becomes the agent's response; stderr is kept
+/// as the audit-log payload. A non-zero exit is surfaced as an error so
+/// the caller can decide whether to respond with a graceful "[error]"
+/// message or skip the task entirely.
+async fn run_exec(cmd: &str, task_text: &str) -> Result<ExecOutput> {
+    let mut child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `sh -c {cmd:?}` — is the command on PATH?"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(task_text.as_bytes())
+            .await
+            .context("writing task text to exec stdin")?;
+        // Drop stdin so the executor sees EOF — many CLI agents (Goose
+        // included) wait on stdin close rather than fixed-length reads.
+        drop(stdin);
+    }
+
+    let out = child
+        .wait_with_output()
+        .await
+        .context("waiting for exec to finish")?;
+
+    let response = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let log = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    if !out.status.success() {
+        return Err(anyhow!(
+            "exec exited with {}: {}",
+            out.status,
+            log.lines().rev().find(|l| !l.is_empty()).unwrap_or("(no stderr)")
+        ));
+    }
+    if response.is_empty() {
+        return Err(anyhow!(
+            "exec produced empty stdout (stderr last line: {})",
+            log.lines().rev().find(|l| !l.is_empty()).unwrap_or("(no stderr)")
+        ));
+    }
+
+    Ok(ExecOutput { response, log })
+}
 
 /// Presence announcements are valid for this long; the agent re-announces
 /// well before TTL so a peer that joins the mesh during the window still
@@ -29,7 +90,11 @@ pub async fn handle(
     json: bool,
 ) -> Result<()> {
     match action {
-        AgentAction::Run { name, capabilities } => {
+        AgentAction::Run {
+            name,
+            capabilities,
+            exec,
+        } => {
             let caps = parse_capabilities(&capabilities);
             let node = Arc::new(build_node(
                 &name,
@@ -127,7 +192,16 @@ pub async fn handle(
                                 });
                                 if let Some(text) = task.text() {
                                     event["message"] = serde_json::json!(text);
-                                    let response = format!("Echo: {}", text);
+                                    let response = match run_exec(&exec, text).await {
+                                        Ok(out) => {
+                                            event["log_bytes"] = serde_json::json!(out.log.len());
+                                            out.response
+                                        }
+                                        Err(e) => {
+                                            event["exec_error"] = serde_json::json!(e.to_string());
+                                            format!("[error] {e}")
+                                        }
+                                    };
                                     match node.respond(&task, &response).await {
                                         Ok(()) => {
                                             event["response"] = serde_json::json!(response);
@@ -142,11 +216,29 @@ pub async fn handle(
                                 println!("Received task {} from {}", task.id, task.from);
                                 if let Some(text) = task.text() {
                                     println!("  Message: {}", text);
-                                    let response = format!("Echo: {}", text);
+                                    let response = match run_exec(&exec, text).await {
+                                        Ok(out) => {
+                                            if !out.log.is_empty() {
+                                                println!("  Exec log: {} bytes", out.log.len());
+                                            }
+                                            out.response
+                                        }
+                                        Err(e) => {
+                                            eprintln!("  Exec failed: {e}");
+                                            format!("[error] {e}")
+                                        }
+                                    };
                                     if let Err(e) = node.respond(&task, &response).await {
                                         eprintln!("  Failed to respond: {}", e);
                                     } else {
-                                        println!("  Responded: {}", response);
+                                        // Truncate the printed response so a long agent
+                                        // answer doesn't dominate the terminal.
+                                        let preview = if response.len() > 200 {
+                                            format!("{}…", &response[..200])
+                                        } else {
+                                            response.clone()
+                                        };
+                                        println!("  Responded: {}", preview);
                                     }
                                 }
                             }

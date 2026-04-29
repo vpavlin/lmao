@@ -293,10 +293,24 @@ pub async fn handle(
             if !json {
                 println!("Discovering peers via presence...");
             }
-            let poll_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            // 25s gives a freshly-spawned client time to dial the gossip
+            // mesh AND comfortably exceeds the agent re-announce interval
+            // (default 15s) so a single missed cycle doesn't fail the
+            // delegation. Override with LMAO_DELEGATE_DISCOVERY_SECS.
+            let poll_secs: u64 = std::env::var("LMAO_DELEGATE_DISCOVERY_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(25);
+            let poll_deadline =
+                tokio::time::Instant::now() + std::time::Duration::from_secs(poll_secs);
             while tokio::time::Instant::now() < poll_deadline {
                 node.poll_presence().await?;
                 if !node.peers().all_live().is_empty() {
+                    // Keep polling briefly even after first hit so
+                    // capability-match delegation has multiple peers to
+                    // choose from when the mesh delivers them in waves.
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    node.poll_presence().await?;
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
