@@ -17,7 +17,11 @@
 # fleet of two agents talking through the embedded daemon socket.
 
 # ─── Builder ────────────────────────────────────────────────────────
-FROM rust:1.83-bookworm AS builder
+# Trixie (Debian 13) ships glibc 2.41. The prebuilt libstorage static
+# archive bundled by `storage-bindings` references __isoc23_sscanf
+# from nim-libbacktrace, a glibc 2.38+ symbol — bookworm (2.36) fails
+# to link. Trixie also matches what most CI builders run today.
+FROM rust:1.91-trixie AS builder
 
 ARG LOGOS_DELIVERY_REF=master
 
@@ -67,7 +71,7 @@ RUN mkdir -p "$GOOSE_BIN_DIR" \
        | CONFIGURE=false bash
 
 # ─── Runtime ────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

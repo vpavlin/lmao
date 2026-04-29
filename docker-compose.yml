@@ -17,7 +17,12 @@
 
 services:
   alice:
-    build: .
+    build:
+      context: .
+      # Use host networking during the image build so the nimble deps
+      # the Nim build pulls (status-im/nim-* etc.) can resolve. Some
+      # Docker setups have flaky DNS in the default build network.
+      network: host
     image: lmao:dev
     container_name: lmao-alice
     user: "1000:1000"
@@ -51,7 +56,12 @@ services:
         --exec "sh -c 'echo summarizer-stderr-line >&2; sed s/^/[summarized]\\ /'"
 
   bob:
-    build: .
+    build:
+      context: .
+      # Use host networking during the image build so the nimble deps
+      # the Nim build pulls (status-im/nim-* etc.) can resolve. Some
+      # Docker setups have flaky DNS in the default build network.
+      network: host
     image: lmao:dev
     container_name: lmao-bob
     user: "1000:1000"

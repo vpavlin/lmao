@@ -67,7 +67,9 @@ demo-in-memory:
 demo-containerized: cli-logos-delivery
 	@LIBLOGOSDELIVERY_LIB_DIR="$(LIBLOGOSDELIVERY_LIB_DIR)" ./scripts/demo-containerized.sh
 
-# Force a rebuild of the demo image (--no-cache).
+# Force a rebuild of the demo image (--no-cache + host networking
+# during build so the Nim/nimble package fetches don't hit DNS hiccups
+# in Docker's default build network).
 demo-image:
 	docker compose build --no-cache
 
