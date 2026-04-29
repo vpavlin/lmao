@@ -1,4 +1,4 @@
-.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery basecamp basecamp-module basecamp-ui basecamp-install
+.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery basecamp basecamp-module basecamp-ui basecamp-install basecamp-lgx basecamp-lgx-install
 
 # Build all crates
 build:
@@ -109,6 +109,41 @@ basecamp-install: basecamp
 	@echo "Make sure LMAO_BIN, LIBLOGOSDELIVERY_LIB_DIR, and LD_LIBRARY_PATH"
 	@echo "are exported in the shell that launches Basecamp so the spawned"
 	@echo "lmao agent run subprocess can find liblogosdelivery.so."
+
+# Build portable .lgx packages — fully self-contained, no /nix/store
+# references at runtime. These work with the prebuilt LogosBasecamp
+# AppImage (Linux) / DMG (macOS) downloaded from the Basecamp releases.
+#
+# Output: dist/agent.lgx + dist/agent_ui.lgx
+basecamp-lgx:
+	cd basecamp/agent-module && nix build .#lgx-portable -L
+	cd basecamp/agent-ui && nix build .#lgx-portable -L \
+		--override-input agent "path:$(CURDIR)/basecamp/agent-module"
+	mkdir -p dist
+	cp basecamp/agent-module/result/logos-agent-module-lib.lgx dist/agent.lgx
+	cp basecamp/agent-ui/result/logos-agent_ui-module.lgx       dist/agent_ui.lgx
+	@echo
+	@echo "Portable LGX packages:"
+	@ls -lh dist/agent.lgx dist/agent_ui.lgx
+	@echo
+	@echo "Install into a prebuilt Basecamp with:"
+	@echo "  make basecamp-lgx-install LMAO_BASECAMP_MODULES=<path>"
+	@echo "or via the in-app Package Manager (drag/drop or import)."
+
+# Install portable .lgx packages via lgpm. Override LMAO_BASECAMP_MODULES
+# to point at the prebuilt Basecamp's modules dir (e.g. AppImage's
+# unpacked $APPDIR/usr/share/Logos/modules, or
+# ~/.local/share/Logos/LogosBasecamp/modules for the prebuilt's user dir).
+basecamp-lgx-install: basecamp-lgx
+	@which lgpm > /dev/null || { echo "error: lgpm not on PATH"; \
+		echo "       lgpm ships with the Basecamp release; ensure"; \
+		echo "       \$$BASECAMP_DIR/bin is on \$$PATH"; exit 1; }
+	mkdir -p "$(LMAO_BASECAMP_MODULES)"
+	lgpm --modules-dir "$(LMAO_BASECAMP_MODULES)" install --file dist/agent.lgx
+	lgpm --modules-dir "$(LMAO_BASECAMP_MODULES)" install --file dist/agent_ui.lgx
+	lgpm --modules-dir "$(LMAO_BASECAMP_MODULES)" list
+	@echo
+	@echo "Installed. Restart Basecamp to pick up the new modules."
 
 # Run the ping-pong demo (optionally encrypted)
 demo-ping:

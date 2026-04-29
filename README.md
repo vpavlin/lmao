@@ -187,26 +187,44 @@ runs finish in ~1 min. See `Dockerfile` + `docker-compose.yml`.
 LMAO ships a Basecamp module pair (`basecamp/agent-module` + `basecamp/agent-ui`)
 so you can drive an agent from inside the Logos desktop app.
 
-```bash
-# Build both modules (Nix; ~5 min first build)
-make basecamp
-
-# Install into your local Basecamp dev modules dir
-make basecamp-install            # → ~/.local/share/Logos/LogosBasecampDev/modules
-
-# Make sure Basecamp's process inherits liblogosdelivery on the lib path
-export LIBLOGOSDELIVERY_LIB_DIR=/path/to/logos-delivery/build
-export LD_LIBRARY_PATH="$LIBLOGOSDELIVERY_LIB_DIR:$LD_LIBRARY_PATH"
-export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
-
-# Launch Basecamp (path depends on how you built it)
-~/devel/github.com/logos-co/logos-workspace/repos/logos-basecamp/result/bin/logos-basecamp
-```
-
 The `agent_ui` tab gives you four panes — daemon status, peers,
 delegate-by-capability, content-addressed audit-log fetch — all routed
 through `logos.callModule("agent", …)` into a C++ module that spawns
 `lmao agent run` as a subprocess and proxies its IPC.
+
+**Option A — portable .lgx for the prebuilt Basecamp** (recommended;
+works with the AppImage / DMG from the Basecamp release page):
+
+```bash
+make basecamp-lgx
+# → dist/agent.lgx + dist/agent_ui.lgx — fully self-contained,
+# zero /nix/store references, ~170 KB combined.
+```
+
+Drop both `.lgx` files into Basecamp's Package Manager UI (drag-and-drop
+or "Import"), or:
+
+```bash
+make basecamp-lgx-install LMAO_BASECAMP_MODULES=<path-to-modules-dir>
+```
+
+**Option B — local dev install for a Nix-built Basecamp** (faster
+iteration):
+
+```bash
+make basecamp-install
+# → ~/.local/share/Logos/LogosBasecampDev/modules
+```
+
+Either way, the shell that launches Basecamp must have these env vars
+exported so the module's spawned `lmao agent run` subprocess can find
+its native lib + binary:
+
+```bash
+export LIBLOGOSDELIVERY_LIB_DIR=/path/to/logos-delivery/build
+export LD_LIBRARY_PATH="$LIBLOGOSDELIVERY_LIB_DIR:$LD_LIBRARY_PATH"
+export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
+```
 
 ### 5. Plug in a real coding agent
 
