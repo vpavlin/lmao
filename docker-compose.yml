@@ -1,0 +1,80 @@
+# Container-per-agent fleet for the LMAO demo.
+#
+# Each service is the same `lmao:dev` image (built from the repo root
+# Dockerfile) running as non-root, with isolated filesystem, isolated
+# IPC socket, and outbound network only. Agents reach the host's
+# Ollama at `host.docker.internal:11434` (Linux: extra_hosts maps it to
+# the host gateway; macOS/Windows Docker Desktop sets it automatically).
+#
+# Bring up:
+#   docker compose up -d --build
+#
+# Drive from the host using the daemon sockets exposed via volumes:
+#   target/release/logos-messaging-a2a \
+#       --daemon-socket ./demo-data/alice-sock/lmao.sock daemon status
+#
+# See `scripts/demo-containerized.sh` and `make demo-containerized`.
+
+services:
+  alice:
+    build: .
+    image: lmao:dev
+    container_name: lmao-alice
+    user: "1000:1000"
+    restart: unless-stopped
+    extra_hosts:
+      # Lets `--exec goose` reach an Ollama running on the host (Linux
+      # needs this; Docker Desktop already provides host.docker.internal).
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/alice:/data
+      - ./demo-data/alice-sock:/run/lmao
+    ports:
+      # Optional pass-through — useful when you want the bare-host
+      # `lmao` to dial directly into the agent. The agent dials *out*
+      # to logos.dev regardless of these mappings.
+      - "60010:60010/tcp"
+      - "9010:9010/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      OLLAMA_HOST: host.docker.internal
+      GOOSE_PROVIDER: ollama
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19200
+      --keyfile /data/keyfile
+      --tcp-port 60010 --udp-port 9010
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name alice --capabilities text,summarize
+        --exec "sh -c 'echo summarizer-stderr-line >&2; sed s/^/[summarized]\\ /'"
+
+  bob:
+    build: .
+    image: lmao:dev
+    container_name: lmao-bob
+    user: "1000:1000"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/bob:/data
+      - ./demo-data/bob-sock:/run/lmao
+    ports:
+      - "60011:60011/tcp"
+      - "9011:9011/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      OLLAMA_HOST: host.docker.internal
+      GOOSE_PROVIDER: ollama
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19201
+      --keyfile /data/keyfile
+      --tcp-port 60011 --udp-port 9011
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name bob --capabilities code,review
+        --exec "sh -c 'echo reviewer-stderr-line >&2; sed s/^/[reviewed]\\ \\ \\ /'"

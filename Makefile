@@ -1,4 +1,4 @@
-.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-logos-core demo-logos-core-real cli-logos-delivery
+.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery
 
 # Build all crates
 build:
@@ -55,6 +55,25 @@ cli-logos-delivery:
 # In-memory two-agent demo — no native deps, fast smoke test.
 demo-in-memory:
 	~/.cargo/bin/cargo run --example two_agents
+
+# Container-per-agent demo. Each agent runs as a non-root user inside
+# its own debian-slim container with no host filesystem access except a
+# scoped data volume. Same logos.dev fleet, same five-step narrative,
+# stronger isolation story for `--exec goose` running untrusted task
+# text. Requires docker + docker compose.
+#
+# First run builds the image (~15-20 min: Nim + Rust + Goose download).
+# Subsequent runs reuse the image cache and finish in ~30 s.
+demo-containerized: cli-logos-delivery
+	@LIBLOGOSDELIVERY_LIB_DIR="$(LIBLOGOSDELIVERY_LIB_DIR)" ./scripts/demo-containerized.sh
+
+# Force a rebuild of the demo image (--no-cache).
+demo-image:
+	docker compose build --no-cache
+
+# Tear down the containerised demo if it's still running.
+demo-down:
+	docker compose down --remove-orphans
 
 # Run the ping-pong demo (optionally encrypted)
 demo-ping:
