@@ -1,12 +1,14 @@
 use anyhow::{anyhow, Context, Result};
 use logos_messaging_a2a_storage::StorageBackend;
 use logos_messaging_a2a_transport::Transport;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::AgentAction;
 use crate::common::{build_node, parse_capabilities, IdentityConfig};
+use crate::daemon::{default_socket_path, DaemonServer};
 
 /// Output of an executor invocation: trimmed stdout (the response sent
 /// back over LMAO) and full stderr (the audit log, retained for upload
@@ -119,6 +121,7 @@ pub async fn handle(
     action: AgentAction,
     transport: Arc<dyn Transport>,
     storage: Option<Arc<dyn StorageBackend>>,
+    daemon_socket: Option<PathBuf>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
@@ -171,6 +174,17 @@ pub async fn handle(
                 }
                 println!("Listening for tasks...\n");
             }
+
+            // Bind the IPC socket so other CLI commands on this host can
+            // share this process's already-connected node + storage.
+            let socket = daemon_socket.unwrap_or_else(default_socket_path);
+            let server = Arc::new(DaemonServer::new(
+                socket,
+                node.clone(),
+                storage.clone(),
+                name.clone(),
+            ));
+            tokio::spawn(server.serve());
 
             // Open the inbox subscription before announcing, so we don't
             // miss tasks sent in the moment between announce and the first

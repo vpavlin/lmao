@@ -1,33 +1,96 @@
 use anyhow::Result;
 use logos_messaging_a2a_core::topics;
-use logos_messaging_a2a_transport::Transport;
-use std::sync::Arc;
 
+use crate::cli::Cli;
 use crate::common::{build_node, IdentityConfig};
+use crate::daemon::{default_socket_path, DaemonClient, Request, Response};
 
 /// Display agent identity and topic configuration.
-pub fn handle(
-    transport: Arc<dyn Transport>,
-    identity: &IdentityConfig,
-    json: bool,
-) -> Result<()> {
-    let node = build_node("info", "info command", vec![], transport, identity)?;
-    let pubkey = node.pubkey().to_string();
-    let task_topic = topics::task_topic(&pubkey);
-    let discovery_topic = topics::DISCOVERY;
-    let presence_topic = topics::PRESENCE;
-    let encrypt = identity.encrypt || node.card.intro_bundle.is_some();
+///
+/// Prefers the running daemon when available — that way `lmao info`
+/// returns the *daemon's* identity (the one actually broadcasting on the
+/// network) rather than spinning up an ephemeral node with a different
+/// pubkey. Falls back to the ephemeral path when no daemon is listening.
+pub async fn handle(cli: &Cli) -> Result<()> {
+    let socket = cli
+        .daemon_socket
+        .clone()
+        .unwrap_or_else(default_socket_path);
+    let client = DaemonClient::new(socket);
 
+    if client.probe().await {
+        return print_via_daemon(&client, cli.json).await;
+    }
+
+    print_via_ephemeral(cli).await
+}
+
+async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
+    let resp = client.send(Request::Info).await?;
+    let Response::Info {
+        name,
+        pubkey,
+        capabilities,
+        uptime_secs,
+        socket_path,
+        storage_enabled,
+    } = resp
+    else {
+        anyhow::bail!("unexpected response variant from daemon: {resp:?}");
+    };
+
+    let task_topic = topics::task_topic(&pubkey);
     if json {
         let obj = serde_json::json!({
+            "source": "daemon",
+            "socket": socket_path,
+            "name": name,
+            "public_key": pubkey,
+            "capabilities": capabilities,
+            "uptime_secs": uptime_secs,
+            "storage_enabled": storage_enabled,
+            "task_topic": task_topic,
+            "discovery_topic": topics::DISCOVERY,
+            "presence_topic": topics::PRESENCE,
+        });
+        println!("{}", serde_json::to_string(&obj)?);
+    } else {
+        eprintln!("Source: daemon ({})", socket_path.display());
+        println!("Agent name:      {name}");
+        println!("Public key:      {pubkey}");
+        println!("Capabilities:    {}", capabilities.join(", "));
+        println!("Task topic:      {task_topic}");
+        println!("Discovery topic: {}", topics::DISCOVERY);
+        println!("Presence topic:  {}", topics::PRESENCE);
+        println!("Storage:         {}", if storage_enabled { "enabled" } else { "disabled" });
+        println!("Uptime:          {uptime_secs}s");
+    }
+    Ok(())
+}
+
+async fn print_via_ephemeral(cli: &Cli) -> Result<()> {
+    let transport = crate::build_transport(cli).await?;
+    let identity = IdentityConfig {
+        keyfile: cli.keyfile.clone(),
+        encrypt: cli.encrypt,
+    };
+    let node = build_node("info", "info command", vec![], transport, &identity)?;
+    let pubkey = node.pubkey().to_string();
+    let task_topic = topics::task_topic(&pubkey);
+    let encrypt = identity.encrypt || node.card.intro_bundle.is_some();
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "source": "ephemeral",
             "public_key": pubkey,
             "task_topic": task_topic,
-            "discovery_topic": discovery_topic,
-            "presence_topic": presence_topic,
+            "discovery_topic": topics::DISCOVERY,
+            "presence_topic": topics::PRESENCE,
             "encryption": encrypt,
         });
         println!("{}", serde_json::to_string(&obj)?);
     } else {
+        eprintln!("Source: ephemeral (no daemon listening)");
         if let Some(ref kf) = identity.keyfile {
             eprintln!("Keyfile: {}", kf.display());
         } else {
@@ -35,14 +98,13 @@ pub fn handle(
         }
         println!("Public key:      {pubkey}");
         println!("Task topic:      {task_topic}");
-        println!("Discovery topic: {discovery_topic}");
-        println!("Presence topic:  {presence_topic}");
+        println!("Discovery topic: {}", topics::DISCOVERY);
+        println!("Presence topic:  {}", topics::PRESENCE);
         println!(
             "Encryption:      {}",
             if encrypt { "enabled" } else { "disabled" }
         );
     }
-
     Ok(())
 }
 
@@ -50,8 +112,11 @@ pub fn handle(
 mod tests {
     use super::*;
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
+    use logos_messaging_a2a_transport::Transport;
+    use std::sync::Arc;
 
-    /// Helper: build a node and return the info fields as JSON.
+    /// Helper: build a node from an in-memory transport and return the
+    /// info fields the ephemeral path would print, as JSON.
     fn info_json(encrypt: bool) -> serde_json::Value {
         let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let identity = IdentityConfig {
@@ -61,6 +126,7 @@ mod tests {
         let node = build_node("info", "info command", vec![], transport, &identity).unwrap();
         let pubkey = node.pubkey().to_string();
         serde_json::json!({
+            "source": "ephemeral",
             "public_key": pubkey,
             "task_topic": topics::task_topic(&pubkey),
             "discovery_topic": topics::DISCOVERY,

@@ -93,6 +93,13 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, global = true)]
     pub storage_port: u16,
 
+    /// Path to the daemon's Unix-domain socket. `agent run` binds it;
+    /// other commands probe it and forward over IPC if a daemon is
+    /// listening, otherwise spin up a short-lived node themselves.
+    /// Defaults to `$XDG_RUNTIME_DIR/lmao.sock`.
+    #[arg(long, global = true)]
+    pub daemon_socket: Option<PathBuf>,
+
     /// Path to a persistent identity keyfile (hex-encoded 32-byte signing key).
     /// If the file does not exist, a new key is generated and saved.
     /// When provided, all commands share the same identity.

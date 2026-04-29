@@ -2,6 +2,7 @@ mod agent;
 mod cli;
 mod common;
 mod completion;
+mod daemon;
 mod health;
 mod info;
 mod metrics;
@@ -33,12 +34,22 @@ async fn main() -> Result<()> {
         encrypt: cli.encrypt,
     };
 
+    let daemon_socket = cli.daemon_socket.clone();
+
+    // `info` decides between the daemon and an ephemeral node itself, so
+    // don't pay the cost of building a transport eagerly. Other commands
+    // get the existing build-up-front behaviour for now; they'll grow
+    // their own daemon-aware paths in follow-up commits.
+    if matches!(cli.command, Commands::Info) {
+        return info::handle(&cli).await;
+    }
+
     let transport: Arc<dyn Transport> = build_transport(&cli).await?;
     let storage: Option<Arc<dyn StorageBackend>> = build_storage(&cli).await?;
 
     match cli.command {
         Commands::Agent { action } => {
-            agent::handle(action, transport, storage, &identity, json).await
+            agent::handle(action, transport, storage, daemon_socket, &identity, json).await
         }
         Commands::Task { action } => task::handle(action, transport, &identity, json).await,
         Commands::Presence { action } => presence::handle(action, transport, &identity, json).await,
@@ -49,13 +60,15 @@ async fn main() -> Result<()> {
             completion::handle(shell);
             Ok(())
         }
-        Commands::Info => info::handle(transport, &identity, json),
+        Commands::Info => unreachable!("handled above"),
     }
 }
 
 /// Construct the chosen transport, boxed as `Arc<dyn Transport>` so all
-/// command handlers can share a single signature.
-async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
+/// command handlers can share a single signature. Also used by daemon-
+/// aware handlers (e.g. `info`) on the fallback path when no daemon is
+/// listening.
+pub(crate) async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
     match cli.transport {
         #[cfg(feature = "logos-delivery")]
         TransportKind::LogosDelivery => {
@@ -90,7 +103,8 @@ async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
 /// Construct the chosen storage backend, if any. Returns `Ok(None)` when
 /// the user picked `--storage none` so callers don't need to thread a
 /// dummy backend through the call sites.
-async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBackend>>> {
+#[allow(dead_code)] // also re-exported to daemon-aware fallback paths
+pub(crate) async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBackend>>> {
     match cli.storage {
         StorageKind::None => Ok(None),
         #[cfg(feature = "libstorage")]
