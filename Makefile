@@ -1,4 +1,4 @@
-.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery
+.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery basecamp basecamp-module basecamp-ui basecamp-install
 
 # Build all crates
 build:
@@ -76,6 +76,39 @@ demo-image:
 # Tear down the containerised demo if it's still running.
 demo-down:
 	docker compose down --remove-orphans
+
+# Build the Basecamp module pair (`agent` core + `agent_ui` QML) via Nix.
+# The UI flake takes the core module via `agent.url = path:..` — when
+# that path can't be resolved (sub-projects git-init'd separately), we
+# fall back to --override-input with an absolute path.
+basecamp: basecamp-module basecamp-ui
+
+basecamp-module:
+	cd basecamp/agent-module && nix build -L
+
+basecamp-ui: basecamp-module
+	cd basecamp/agent-ui && nix build -L \
+		--override-input agent "path:$(CURDIR)/basecamp/agent-module"
+
+# Copy plugin artifacts into the Logos Basecamp dev modules directory
+# so a locally-built `LogosBasecamp` finds them. After this, launch
+# Basecamp and the `agent_ui` tab should appear in the sidebar.
+#
+# Override LMAO_BASECAMP_MODULES to install elsewhere (e.g. a portable
+# bundle's modules dir).
+LMAO_BASECAMP_MODULES ?= $(HOME)/.local/share/Logos/LogosBasecampDev/modules
+basecamp-install: basecamp
+	mkdir -p "$(LMAO_BASECAMP_MODULES)/agent" "$(LMAO_BASECAMP_MODULES)/agent_ui"
+	cp basecamp/agent-module/result/lib/agent_plugin.so "$(LMAO_BASECAMP_MODULES)/agent/"
+	cp basecamp/agent-module/metadata.json              "$(LMAO_BASECAMP_MODULES)/agent/"
+	cp basecamp/agent-ui/result/lib/Main.qml            "$(LMAO_BASECAMP_MODULES)/agent_ui/"
+	cp basecamp/agent-ui/result/lib/metadata.json       "$(LMAO_BASECAMP_MODULES)/agent_ui/"
+	@echo
+	@echo "Installed to $(LMAO_BASECAMP_MODULES)"
+	@echo "Launch Basecamp; the 'agent_ui' tab should appear."
+	@echo "Make sure LMAO_BIN, LIBLOGOSDELIVERY_LIB_DIR, and LD_LIBRARY_PATH"
+	@echo "are exported in the shell that launches Basecamp so the spawned"
+	@echo "lmao agent run subprocess can find liblogosdelivery.so."
 
 # Run the ping-pong demo (optionally encrypted)
 demo-ping:

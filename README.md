@@ -182,6 +182,32 @@ each container's daemon over a Unix-socket volume mount.
 First run builds the image (~15-20 min: Nim + Rust + Goose); cached
 runs finish in ~1 min. See `Dockerfile` + `docker-compose.yml`.
 
+### 4b. (Optional) Run inside Logos Basecamp
+
+LMAO ships a Basecamp module pair (`basecamp/agent-module` + `basecamp/agent-ui`)
+so you can drive an agent from inside the Logos desktop app.
+
+```bash
+# Build both modules (Nix; ~5 min first build)
+make basecamp
+
+# Install into your local Basecamp dev modules dir
+make basecamp-install            # → ~/.local/share/Logos/LogosBasecampDev/modules
+
+# Make sure Basecamp's process inherits liblogosdelivery on the lib path
+export LIBLOGOSDELIVERY_LIB_DIR=/path/to/logos-delivery/build
+export LD_LIBRARY_PATH="$LIBLOGOSDELIVERY_LIB_DIR:$LD_LIBRARY_PATH"
+export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
+
+# Launch Basecamp (path depends on how you built it)
+~/devel/github.com/logos-co/logos-workspace/repos/logos-basecamp/result/bin/logos-basecamp
+```
+
+The `agent_ui` tab gives you four panes — daemon status, peers,
+delegate-by-capability, content-addressed audit-log fetch — all routed
+through `logos.callModule("agent", …)` into a C++ module that spawns
+`lmao agent run` as a subprocess and proxies its IPC.
+
 ### 5. Plug in a real coding agent
 
 The demo defaults to `sed` so it works without a model. Swap in
