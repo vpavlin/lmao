@@ -8,6 +8,7 @@ mod info;
 mod metrics;
 mod presence;
 mod session;
+mod storage;
 mod task;
 
 use anyhow::Result;
@@ -36,12 +37,14 @@ async fn main() -> Result<()> {
 
     let daemon_socket = cli.daemon_socket.clone();
 
-    // `info` decides between the daemon and an ephemeral node itself, so
-    // don't pay the cost of building a transport eagerly. Other commands
-    // get the existing build-up-front behaviour for now; they'll grow
-    // their own daemon-aware paths in follow-up commits.
+    // `info` and `storage` go straight to the daemon — no point paying
+    // the cost of building a transport eagerly when the daemon will (or
+    // must) handle the request.
     if matches!(cli.command, Commands::Info) {
         return info::handle(&cli).await;
+    }
+    if let Commands::Storage { action } = cli.command {
+        return storage::handle(action, daemon_socket.as_ref(), cli.json).await;
     }
 
     let transport: Arc<dyn Transport> = build_transport(&cli).await?;
@@ -65,6 +68,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Info => unreachable!("handled above"),
+        Commands::Storage { .. } => unreachable!("handled above"),
     }
 }
 

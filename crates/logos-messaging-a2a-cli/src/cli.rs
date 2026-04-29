@@ -152,6 +152,24 @@ pub enum Commands {
     },
     /// Display agent identity and topic configuration
     Info,
+    /// Storage operations (fetch a CID from the daemon's blockstore, etc.)
+    Storage {
+        #[command(subcommand)]
+        action: StorageAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StorageAction {
+    /// Fetch raw bytes by CID from a running daemon's storage backend.
+    /// Requires the daemon to have been started with `--storage libstorage`.
+    Fetch {
+        /// Content ID to retrieve.
+        cid: String,
+        /// Write the bytes to this file. Defaults to stdout.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

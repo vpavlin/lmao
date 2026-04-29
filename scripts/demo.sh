@@ -127,12 +127,12 @@ wait_for_pubkey() {
 echo
 echo "═══ LMAO demo on logos.dev ═══"
 echo
-echo "[1/4] starting two agents (persistent identities + embedded storage + IPC sockets)…"
+echo "[1/5] starting two agents (persistent identities + embedded storage + IPC sockets)…"
 run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_SOCKET" "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
 run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_SOCKET"   "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
 
 echo
-echo "[2/4] waiting for each to connect to logos.dev and announce…"
+echo "[2/5] waiting for each to connect to logos.dev and announce…"
 ALICE_PK="$(wait_for_pubkey "$ALICE_LOG" 30)"
 BOB_PK="$(wait_for_pubkey "$BOB_LOG"   30)"
 echo "  alice pubkey: ${ALICE_PK:0:16}…"
@@ -143,7 +143,7 @@ echo "  bob   pubkey: ${BOB_PK:0:16}…"
 sleep 12
 
 echo
-echo "[3/4] discovering peers via presence (through alice's daemon — no new node)…"
+echo "[3/5] discovering peers via presence (through alice's daemon — no new node)…"
 # We talk to alice's already-running node over IPC instead of spinning
 # up a fresh logos-delivery client for every CLI invocation. This
 # collapses 20+ seconds of mesh-join into a sub-millisecond Unix
@@ -152,12 +152,29 @@ echo "[3/4] discovering peers via presence (through alice's daemon — no new no
   presence peers --timeout 5 2>&1 | "${LOG_FILTER[@]}"
 
 echo
-echo "[4/4] delegating a task by capability=code → bob (via alice's daemon)…"
+echo "[4/5] delegating a task by capability=code → bob (via alice's daemon)…"
+DELEGATE_OUT="$DEMO_DIR/delegate.out"
 "$BIN" --daemon-socket "$ALICE_SOCKET" \
   task delegate \
     --capability code \
     --text "Review this snippet: fn main() { println!(\"hello\"); }" \
-    --timeout 25 2>&1 | "${LOG_FILTER[@]}"
+    --timeout 25 2>&1 | "${LOG_FILTER[@]}" | tee "$DELEGATE_OUT"
+
+# Pull the codex CID from the response and fetch the audit log from
+# bob's daemon — the same blockstore that produced it. Closes the loop
+# on the "verifiable agent action" story: the response's pointer is
+# retrievable, in this same demo, with one CLI call.
+CID="$(grep -oE 'codex://[A-Za-z0-9]+' "$DELEGATE_OUT" | head -1 | sed 's|codex://||')"
+if [[ -n "$CID" ]]; then
+  echo
+  echo "[5/5] fetching bob's execution log by CID via bob's daemon…"
+  echo "  cid: $CID"
+  "$BIN" --daemon-socket "$BOB_SOCKET" storage fetch "$CID" 2>&1 \
+    | "${LOG_FILTER[@]}" | sed 's/^/  /'
+else
+  echo
+  echo "[5/5] (skipped: no CID found in delegation response)"
+fi
 
 echo
 echo "═══ Demo complete ═══"
