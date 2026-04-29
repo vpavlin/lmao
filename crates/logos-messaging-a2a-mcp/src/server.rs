@@ -54,14 +54,26 @@ impl<T: Transport> LogosA2ABridge<T> {
     )]
     async fn discover_agents(&self) -> Result<CallToolResult, McpError> {
         let node = self.node.read().await;
-        let cards = node.discover().await.map_err(|e| McpError {
+        let new_cards = node.discover().await.map_err(|e| McpError {
             code: ErrorCode::INTERNAL_ERROR,
             message: format!("Discovery failed: {e}").into(),
             data: None,
         })?;
 
+        // Merge by public key into the cache. `discover()` only returns cards
+        // that arrived since the previous call, so replacing the cache would
+        // drop everything between announcements; merging matches what users
+        // expect ("all agents I've ever seen, latest copy wins").
         let mut agents = self.agents.write().await;
-        *agents = cards.clone();
+        for card in &new_cards {
+            if let Some(existing) = agents.iter_mut().find(|c| c.public_key == card.public_key) {
+                *existing = card.clone();
+            } else {
+                agents.push(card.clone());
+            }
+        }
+        let cards: Vec<_> = agents.clone();
+        drop(agents);
 
         if cards.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -510,22 +522,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_agents_cache_is_replaced_on_rediscovery() {
+    async fn discover_agents_cache_merges_across_rediscoveries() {
         let transport = InMemoryTransport::new();
+        let bridge = make_test_bridge(transport.clone());
 
         // First discovery: one agent.
         let agent1 = LmaoNode::new("agent-1", "First", vec!["a".into()], transport.clone());
         agent1.announce().await.unwrap();
-
-        let bridge = make_test_bridge(transport.clone());
         bridge.discover_agents().await.unwrap();
         assert_eq!(bridge.agents.read().await.len(), 1);
 
-        // Second discovery: the bridge re-discovers and gets agent-1 again
-        // (InMemoryTransport replays history). Cache should reflect the new snapshot.
+        // Second agent announces; rediscovery should *add* agent-2 to the
+        // cache without dropping agent-1. (`LmaoNode::discover()` keeps its
+        // subscription open between calls and only returns new arrivals,
+        // so the bridge merges by pubkey rather than replacing the cache.)
+        let agent2 = LmaoNode::new("agent-2", "Second", vec!["b".into()], transport.clone());
+        agent2.announce().await.unwrap();
         let result = bridge.discover_agents().await.unwrap();
         let text = result_text(&result);
-        assert!(text.contains("agent-1"));
+        assert!(text.contains("agent-1"), "agent-1 should remain in cache");
+        assert!(text.contains("agent-2"), "agent-2 should be added");
+        assert_eq!(bridge.agents.read().await.len(), 2);
     }
 
     // ── discover_agents response formatting ──

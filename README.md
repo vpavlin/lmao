@@ -91,30 +91,40 @@ Claude Desktop (`claude_desktop_config.json`) or Cursor (`.cursor/mcp.json`):
 | `send_to_agent` | Send a message to an agent by name and get a response |
 | `list_cached_agents` | List agents from the last discovery (no network call) |
 
-### Path 2.5: Native Waku Transport (no Docker needed)
+### Path 2: Embedded Logos Messaging node (no Docker, real network)
 
-Run a Waku node in-process using libwaku FFI — no separate nwaku container required.
+Run a Logos Messaging node in-process via the
+[`liblogosdelivery`](https://github.com/logos-messaging/logos-delivery)
+C FFI. No separate process required; agents are first-class peers on
+the `logos.dev` fleet.
 
-**Prerequisites:** Nim 2.x (`choosenim`), Rust stable.
+**Prerequisites:** Nim 2.x (`choosenim`), Rust stable, `liblogosdelivery.so`
+built from the upstream repo.
 
 ```bash
-# Build with native-waku feature
-cargo build -p logos-messaging-a2a-transport --features native-waku
+# Build the native lib once
+git clone https://github.com/logos-messaging/logos-delivery
+( cd logos-delivery && make liblogosdelivery )
+export LIBLOGOSDELIVERY_LIB_DIR=$(pwd)/logos-delivery/build
+export LD_LIBRARY_PATH=$LIBLOGOSDELIVERY_LIB_DIR
 
-# Use in code:
-use logos_messaging_a2a_transport::NativeWakuTransport;
-use waku_bindings::WakuNodeConfig;
-
-let transport = NativeWakuTransport::new(WakuNodeConfig {
-    tcp_port: Some(60010),
-    ..Default::default()
-}).await?;
-transport.connect("/ip4/x.x.x.x/tcp/60000/p2p/...").await?;
+# Build the LMAO CLI / examples with the logos-delivery feature
+cargo build --features logos-delivery -p logos-messaging-a2a-cli
+cargo run --features logos-delivery --example logos_delivery_two_agents
 ```
 
-The `NativeWakuTransport` implements the same `Transport` trait — drop-in replacement for `NwakuRestTransport`.
+```rust
+use logos_messaging_a2a_transport::logos_delivery::{LogosDeliveryTransport, NodeConfig};
 
-### Path 2: Logos Core IComponent (future)
+let transport = LogosDeliveryTransport::new(NodeConfig::logos_dev()).await?;
+// Implements the same Transport trait — drop in to LmaoNode::new(..., transport)
+```
+
+`LogosDeliveryTransport` is the production path. The `--transport rest`
+fallback (talking to an external nwaku via REST) remains for users who
+already have nwaku running.
+
+### Path 3: Logos Core IComponent (future)
 
 Once the `.lgx` plugin is ready (auto-built on `v*` tags):
 
@@ -614,7 +624,6 @@ module/
 - [x] `LogosCoreDeliveryTransport` — native delivery_module IPC transport
 - [x] `LogosCoreStorageBackend` — native storage_module IPC backend
 - [x] Logos Core e2e demo (stub + real SDK support)
-- [x] libwaku FFI — via `native-waku` feature (no separate nwaku process)
 - [x] `LogosDeliveryTransport` — embedded Logos Messaging node via `liblogosdelivery` FFI (`logos-delivery` feature, `logos.dev` preset)
 - [x] CID-based large payload offloading to Logos Storage
 - [x] Full SDS protocol — bloom filters, causal ordering, batch ACK, repair requests
