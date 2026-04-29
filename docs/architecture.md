@@ -1,497 +1,437 @@
-# logos-messaging-a2a Architecture
+# LMAO Architecture
 
-## Full Stack Diagram
+## Stack at a Glance
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        Application Layer                             │
 │                                                                      │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐            │
-│  │  lmao-cli    │   │  echo_agent  │   │  ping_pong   │            │
-│  │  (CLI binary) │   │  (example)   │   │  (example)   │            │
-│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘            │
-│         │                  │                   │                     │
-│  ┌──────┴──────┐    ┌──────┴──────────────────┴──────┐             │
-│  │  lmao-mcp   │    │         lmao-ffi / ffi         │             │
-│  │  (MCP bridge)│    │  (C/Swift/Kotlin bindings)     │             │
-│  └──────┬───────┘   └──────┬─────────────────────────┘             │
-│         └──────────────────┼───────────────────────────              │
-│                            │                                         │
-├────────────────────────────┼─────────────────────────────────────────┤
-│                     Node Layer                                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────────┐     │
+│  │   lmao CLI   │  │  lmao agent  │  │     Basecamp pair       │     │
+│  │              │  │     run      │  │                         │     │
+│  │ info, peers, │  │              │  │  agent (universal core) │     │
+│  │ task send,   │  │  daemon +    │  │  agent_ui (QML view)    │     │
+│  │ delegate,    │  │  inbox loop  │  │                         │     │
+│  │ storage,     │  │  + executor  │  │  Spawns `lmao agent     │     │
+│  │ presence     │  │  + storage   │  │  run`, talks to it via  │     │
+│  └──────┬───────┘  └──────┬───────┘  │  the same IPC socket    │     │
+│         │  IPC            │          └────────────┬────────────┘     │
+│         ▼                 │                       │                  │
+│  ┌────────────────────────┴───────────────────────┴───────────┐      │
+│  │           Unix-socket IPC (length-prefixed JSON)           │      │
+│  │     $XDG_RUNTIME_DIR/lmao.sock — one request per conn      │      │
+│  └────────────────────────────────────────────────────────────┘      │
 │                                                                      │
-│  ┌─────────────────────────┴──────────────────────────────┐         │
-│  │                 LmaoNode<T>                          │         │
-│  │                                                         │         │
-│  │  • announce()     — broadcast AgentCard                 │         │
-│  │  • discover()     — find agents on network              │         │
-│  │  • send_task()    — send task with SDS reliability      │         │
-│  │  • poll_tasks()   — receive incoming tasks              │         │
-│  │  • respond()      — reply to a task                     │         │
-│  │  • presence       — PeerMap with heartbeat broadcasts   │         │
-│  │  • delegate_task()— forward subtasks to capable peers  │         │
-│  │                                                         │         │
-│  │  Identity: secp256k1 keypair                            │         │
-│  │  Integrates: crypto, execution, storage, transport      │         │
-│  └────────┬──────────┬──────────┬──────────┬──────────────┘         │
-│           │          │          │          │                          │
-├───────────┼──────────┼──────────┼──────────┼─────────────────────────┤
-│           │          │          │          │                          │
-│  ┌────────┴───┐ ┌────┴─────┐ ┌─┴────────┐ │                        │
-│  │   Crypto   │ │Execution │ │  Storage  │ │                        │
-│  │            │ │          │ │           │ │                        │
-│  │ X25519 DH  │ │ Status   │ │ Codex    │ │                        │
-│  │ ChaCha20   │ │ Network  │ │ REST API │ │                        │
-│  │ Poly1305   │ │ (EVM)    │ │          │ │                        │
-│  │            │ │ LEZ stub │ │ LogosCore│ │                        │
-│  │ IntroBundle│ │          │ │ backend  │ │                        │
-│  └────────────┘ └──────────┘ └──────────┘ │                        │
-│                                            │                         │
-├────────────────────────────────────────────┼─────────────────────────┤
-│                  Reliability Layer (minimal-SDS)                      │
+├──────────────────────────────────────────────────────────────────────┤
+│                          Node Layer                                  │
 │                                                                      │
-│  ┌─────────────────────────────────────────┴──────────────┐         │
-│  │              SdsTransport<T: WakuTransport>             │         │
-│  │                                                         │         │
-│  │  • publish_reliable() — retransmit up to 3x             │         │
-│  │  • send_ack()         — acknowledge receipt             │         │
-│  │  • poll_dedup()       — deduplicate by message ID       │         │
-│  │  • causal ordering    — lamport clocks + buffering      │         │
-│  │  • bloom filter dedup — probabilistic duplicate detect  │         │
-│  │  • batch ACK          — coalesce acknowledgements       │         │
-│  │                                                         │         │
-│  │  ACK timeout: 10s | Max retries: 3                      │         │
-│  └─────────────────────────┬──────────────────────────────┘         │
-│                            │                                         │
-├────────────────────────────┼─────────────────────────────────────────┤
-│                  Transport Layer (swappable)                          │
+│  ┌────────────────────────────────────────────────────────────┐      │
+│  │                    LmaoNode<T: Transport>                  │      │
+│  │                                                            │      │
+│  │  announce()/discover()  — AgentCard pub/sub                │      │
+│  │  send_task()/poll_tasks()/respond()  — A2A task flow       │      │
+│  │  poll_presence()        — live PeerMap from heartbeats     │      │
+│  │  delegate_task()        — fan-out to capable peers         │      │
+│  │  respond_stream()/poll_stream_chunks()/reassemble_stream() │      │
+│  │                                                            │      │
+│  │  Identity:  secp256k1 + optional X25519 IntroBundle        │      │
+│  │  Caches:    discover_rx, presence_rx, stream_rx, task_rx   │      │
+│  │             (subscriptions are sticky — gossip mesh        │      │
+│  │              doesn't buffer for late subscribers)          │      │
+│  └──┬──────────┬──────────┬──────────┬────────────────────────┘      │
+│     │          │          │          │                                │
+├─────┼──────────┼──────────┼──────────┼────────────────────────────────┤
+│     │          │          │          │                                │
+│  ┌──┴────┐ ┌───┴────┐ ┌───┴─────┐ ┌──┴──────────┐                    │
+│  │Crypto │ │Storage │ │Executor │ │  Execution  │                    │
+│  │       │ │        │ │         │ │             │                    │
+│  │X25519 │ │trait   │ │--exec   │ │ Status Net  │                    │
+│  │ECDH + │ │Storage-│ │CLI      │ │ EVM client  │                    │
+│  │ChaCha │ │Backend │ │(stdin/  │ │ (x402 only) │                    │
+│  │20-    │ │        │ │ stdout) │ │             │                    │
+│  │Poly   │ │impls:  │ │         │ │ LEZ stub    │                    │
+│  │1305   │ │ libstg │ │default: │ │             │                    │
+│  │       │ │ rest   │ │ goose   │ │             │                    │
+│  │Intro- │ │ logos- │ │         │ │             │                    │
+│  │Bundle │ │  core  │ │         │ │             │                    │
+│  └───────┘ └────────┘ └─────────┘ └─────────────┘                    │
 │                                                                      │
-│  ┌─────────────────────────┴──────────────────────────────┐         │
-│  │            trait WakuTransport                          │         │
-│  │                                                         │         │
-│  │  • publish(topic, payload)                              │         │
-│  │  • subscribe(topic)                                     │         │
-│  │  • poll(topic) -> Vec<Vec<u8>>                          │         │
-│  │                                                         │         │
-│  ├─────────────────────────────────────────────────────────┤         │
-│  │                                                         │         │
-│  │  NwakuRestTransport        LogosDeliveryTransport       │         │
-│  │  (REST fallback)           (liblogosdelivery FFI)       │         │
-│  │  http://localhost:8645     preset: "logos.dev"          │         │
-│  │                                                         │         │
-│  └─────────────────────────┬──────────────────────────────┘         │
-│                            │                                         │
-├────────────────────────────┼─────────────────────────────────────────┤
-│                     Waku Network                                     │
+├──────────────────────────────────────────────────────────────────────┤
+│              Reliability Layer  (logos-messaging-a2a-transport::sds) │
 │                                                                      │
-│  ┌─────────────────────────┴──────────────────────────────┐         │
-│  │              Waku Relay (pub/sub)                        │         │
-│  │                                                         │         │
-│  │  Content Topics:                                        │         │
-│  │  /lmao/1/discovery/proto        AgentCard broadcasts    │         │
-│  │  /lmao/1/presence/proto         Presence heartbeats     │         │
-│  │  /lmao/1/task-{pubkey}/proto    Task inbox per agent    │         │
-│  │  /lmao/1/ack-{msg_id}/proto     SDS acknowledgements   │         │
-│  │                                                         │         │
-│  └─────────────────────────────────────────────────────────┘         │
+│  ┌────────────────────────────────────────────────────────────┐      │
+│  │              SdsTransport<T: Transport>                    │      │
+│  │                                                            │      │
+│  │   publish_reliable() / poll_dedup() / send_ack()           │      │
+│  │   lamport clocks · bloom-filter dedup · batch ACK          │      │
+│  │   retransmit ≤ 3× · ACK timeout 10 s                       │      │
+│  └────────────────────────┬───────────────────────────────────┘      │
+│                           │                                          │
+├───────────────────────────┼──────────────────────────────────────────┤
+│                  Transport Layer  (swappable trait Transport)        │
 │                                                                      │
-│  ┌─────────────────────────────────────────────────────────┐         │
-│  │  nwaku node (relay, store, filter)                      │         │
-│  │  OR embedded libwaku via logos-delivery-rust-bindings    │         │
-│  └─────────────────────────────────────────────────────────┘         │
+│  ┌────────────────────────┴───────────────────────────────────┐      │
+│  │                      trait Transport                       │      │
+│  │   publish · subscribe (mpsc::Receiver) · unsubscribe       │      │
+│  ├────────────────────────────────────────────────────────────┤      │
+│  │ LogosDeliveryTransport     LogosCoreDeliveryTransport      │      │
+│  │ (`logos-delivery` feat,    (`logos-core` feat,             │      │
+│  │  default)                   IPC via delivery_module)       │      │
+│  │ liblogosdelivery FFI                                       │      │
+│  │ preset: "logos.dev"                                        │      │
+│  ├────────────────────────────────────────────────────────────┤      │
+│  │ LogosMessagingTransport    InMemoryTransport               │      │
+│  │ (`rest` feat,               (built-in, no deps)            │      │
+│  │  nwaku REST fallback)       in-process tests + demos       │      │
+│  └────────────────────────┬───────────────────────────────────┘      │
+│                           │                                          │
+├───────────────────────────┼──────────────────────────────────────────┤
+│                       Logos Messaging Network                        │
+│                                                                      │
+│  ┌────────────────────────┴───────────────────────────────────┐      │
+│  │  Pub/Sub Relay  (Waku-derived gossipsub mesh)              │      │
+│  │                                                            │      │
+│  │  Content topics (4 segments: /app/gen/name/enc):           │      │
+│  │   /lmao/1/discovery/proto             AgentCard broadcasts │      │
+│  │   /lmao/1/presence/proto              PresenceAnnounce     │      │
+│  │   /lmao/1/task-{pubkey}/proto         per-agent task inbox │      │
+│  │   /lmao/1/ack-{msg_id}/proto          SDS acknowledgements │      │
+│  │   /lmao/1/stream-{task_id}/proto      respond_stream chunks│      │
+│  │                                                            │      │
+│  │  Names like `task-{pubkey}` are hyphen-encoded type+id —   │      │
+│  │  the underlying transport requires exactly 4 segments.     │      │
+│  └────────────────────────────────────────────────────────────┘      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Crate Dependency Graph
+## Crate Layout
 
 ```
 logos-messaging-a2a (workspace root)
 │
-├── logos-messaging-a2a-core           A2A protocol types (AgentCard, Task, etc.)
-│   └── depends on: crypto
+├── logos-messaging-a2a-core           A2A protocol types, topics, delegation, retry
+│   └── deps: crypto
 │
-├── logos-messaging-a2a-crypto         X25519 ECDH + ChaCha20-Poly1305 encryption
-│   └── no internal deps
+├── logos-messaging-a2a-crypto         X25519 ECDH + ChaCha20-Poly1305 + identity
+│   └── deps: (none internal)
 │
-├── logos-messaging-a2a-transport      Waku transport trait + SDS reliability layer
-│   └── no internal deps
+├── logos-messaging-a2a-transport      Transport trait + SDS reliability + backends
+│   ├── feat `logos-delivery`  → LogosDeliveryTransport (liblogosdelivery FFI)
+│   ├── feat `logos-core`      → LogosCoreDeliveryTransport (Logos Core IPC)
+│   ├── feat `rest`            → LogosMessagingTransport (nwaku REST fallback)
+│   └── always: InMemoryTransport (in-process)
 │
-├── logos-messaging-a2a-storage        Storage backends (Codex REST, LogosCore)
-│   └── no internal deps
+├── logos-messaging-a2a-storage        StorageBackend trait + impls
+│   ├── feat `libstorage`      → LibstorageBackend (embedded Codex via FFI)
+│   ├── feat `logos-core`      → LogosCoreStorageBackend (Logos Core IPC)
+│   └── always: LogosStorageRest (Codex REST fallback)
 │
-├── logos-messaging-a2a-execution      On-chain execution (Status Network, LEZ stub)
-│   └── depends on: core
+├── logos-messaging-a2a-execution      x402 payments (Status Network EVM), LEZ stub
+│   └── deps: core
 │
-├── logos-messaging-a2a-node           LmaoNode — main orchestrator
-│   └── depends on: core, crypto, transport, storage, execution
+├── logos-messaging-a2a-node           LmaoNode — orchestrator
+│   └── deps: core, crypto, transport, storage, execution
 │
-├── logos-messaging-a2a-cli            CLI binary
-│   └── depends on: core, crypto, transport, node
+├── logos-messaging-a2a-cli            `lmao` binary: agent run + daemon-aware sub-cmds
+│   └── deps: core, crypto, transport, storage, node
 │
-├── logos-messaging-a2a-mcp            MCP bridge (stdio server for Claude/Cursor)
-│   └── depends on: core, transport, node
+├── logos-messaging-a2a-mcp            MCP stdio bridge (Claude/Cursor → A2A fleet)
+│   └── deps: core, transport, node
 │
-├── logos-messaging-a2a-ffi            C-ABI FFI bindings (UniFFI)
-│   └── depends on: core, crypto, transport, node
+├── logos-messaging-a2a-ffi            UniFFI bindings (Swift / Kotlin)
+│   └── deps: core, crypto, transport, node
 │
-└── lmao-ffi                           Thin C FFI wrapper
-    └── depends on: core, transport, node
+└── lmao-ffi                           C-ABI thin wrapper
+    └── deps: core, transport, node
 ```
 
-## A2A Types (logos-messaging-a2a-core)
+## CLI Daemon Mode
+
+`lmao agent run` is both the long-lived agent **and** the IPC daemon. Other
+CLI subcommands (`info`, `peers`, `task send`, `task delegate`, `task status`,
+`storage fetch`) probe the socket first and fall back to a one-shot transport
+build if no daemon is running.
+
+```
+                          $XDG_RUNTIME_DIR/lmao.sock
+                                       │
+        ┌──────────────────────────────┼──────────────────────────────┐
+        ▼                              ▼                              ▼
+  lmao info               lmao task send …            lmao task delegate …
+   (probe)                    (probe)                       (probe)
+        │                              │                              │
+        └──────── 4-byte LE length-prefix + JSON Request ──────────────┘
+                                       │
+                                       ▼
+                        ┌───────────────────────────┐
+                        │   lmao agent run (daemon) │
+                        │                           │
+                        │   ┌─────────────────────┐ │
+                        │   │   DaemonServer      │ │     Inbox loop:
+                        │   │   accept loop       │ │      poll_tasks()
+                        │   └────────┬────────────┘ │      poll_presence()
+                        │            │              │      respond + exec
+                        │            ▼              │      upload log → CID
+                        │   ┌─────────────────────┐ │
+                        │   │  Request handler    │ │
+                        │   │  → LmaoNode methods │ │
+                        │   │  → StorageBackend   │ │
+                        │   └─────────────────────┘ │
+                        └───────────────────────────┘
+```
+
+Wire format (`crates/logos-messaging-a2a-cli/src/daemon/protocol.rs`):
+
+| Frame field      | Bytes             | Notes                                |
+|------------------|-------------------|--------------------------------------|
+| length           | 4 (LE u32)        | hard cap: `MAX_FRAME_BYTES = 16 MiB` |
+| body             | `length` UTF-8    | `{ "kind": "...", ... }` JSON         |
+
+Request kinds: `info`, `discover`, `presence_peers`, `task_send`,
+`task_status`, `task_delegate`, `storage_fetch`, `shutdown`. Every connection
+sends exactly one request, reads exactly one response, and closes — no
+multiplexing, no correlation IDs.
+
+Default socket path resolution (in order):
+1. `$XDG_RUNTIME_DIR/lmao.sock`  (preferred — tmpfs, per-session)
+2. `$XDG_CACHE_HOME/lmao/lmao.sock`
+3. `$HOME/.cache/lmao/lmao.sock`
+4. `/tmp/lmao.sock`
+
+## Agent Execution Flow
+
+```
+Sender                 Logos Messaging          Agent (lmao agent run)
+  │                          │                          │
+  │── send_task(text) ───────▶ /lmao/1/task-{B}/proto ───▶ poll_tasks()
+  │                          │                          │
+  │                          │              ┌───────────┴────────────┐
+  │                          │              │  spawn(--exec) on stdin │
+  │                          │              │  collect stdout         │
+  │                          │              │  log full transcript    │
+  │                          │              └───────────┬────────────┘
+  │                          │                          │
+  │                          │                          ▼
+  │                          │              ┌───────────────────────┐
+  │                          │              │ libstorage (embedded  │
+  │                          │              │ Codex). Upload log;   │
+  │                          │              │ return CID.           │
+  │                          │              └───────────┬───────────┘
+  │                          │                          │
+  │                          │                          ▼
+  │                          │              answer + "\n---\nexecution
+  │                          │              log: codex://<CID>"
+  │◀─ poll_tasks() ──────────│ /lmao/1/task-{A}/proto ◀── respond()
+```
+
+Key design points:
+
+- The executor is any process that **reads task text on stdin and prints
+  the answer to stdout**. Default is [Goose](https://github.com/block/goose);
+  any OpenAI-compatible CLI works. Configured via `--exec`.
+- The full execution transcript (LLM messages, tool calls, errors) is
+  uploaded to Logos Storage and the CID appended to the response — the
+  task message itself stays small while the audit trail is content-addressed.
+- Storage offload is opportunistic: if `--storage-backend` is unset,
+  the agent skips upload and replies with the bare answer. Failures during
+  upload are non-fatal; the response still ships, with an `exec_error`
+  field added to the audit log if the executor itself failed.
+
+## A2A Wire Types  (`logos-messaging-a2a-core`)
 
 ```
 AgentCard
-├── name: String
-├── description: String
-├── version: String
+├── name, description, version
 ├── capabilities: Vec<String>
-├── public_key: String              (secp256k1 compressed hex)
-└── intro_bundle: Option<IntroBundle>
+├── public_key: secp256k1 compressed hex
+└── intro_bundle: Option<IntroBundle>      X25519 + version
 
 Task
-├── id: String                      (UUID v4)
-├── from: String                    (sender pubkey)
-├── to: String                      (recipient pubkey)
-├── state: TaskState                (Submitted → Working → Completed/Failed)
-├── message: Message
-│   ├── role: String                ("user" or "agent")
-│   └── parts: Vec<Part>
-│       └── Part::Text { text }
-└── result: Option<Message>         (agent's response)
+├── id: UUID v4
+├── from, to: pubkey hex
+├── state: Submitted → Working → Completed | Failed
+├── message: Message { role, parts: [Part::Text { text }, …] }
+└── result: Option<Message>
 
-A2AEnvelope (wire format)
+A2AEnvelope (wire format on every topic)
 ├── AgentCard(AgentCard)
 ├── Task(Task)
+├── EncryptedTask { from, to, nonce, ciphertext }
+├── StreamChunk { task_id, seq, is_final, text }
 ├── Ack { message_id }
-└── Presence(PresenceAnnounce)
+├── Presence(PresenceAnnouncement)
+├── DelegationRequest / DelegationResult
+└── PaymentRequired (x402)
 ```
 
-## Crypto Layer
+## Discovery + Presence
+
+Two complementary mechanisms:
+
+| Channel               | Topic                          | Lifecycle                          |
+|-----------------------|--------------------------------|------------------------------------|
+| AgentCard broadcast   | `/lmao/1/discovery/proto`      | One-shot on `announce()`. Receiver caches in `AgentRegistry`. |
+| Presence heartbeat    | `/lmao/1/presence/proto`       | Periodic; signed; `PeerMap` ages out stale entries by `ttl_secs`. |
+
+**The gossip mesh does not buffer for late subscribers** — `LmaoNode`
+caches the subscription `Receiver`s (`discover_rx`, `presence_rx`,
+`stream_rx`, `task_rx`) in cells so a polling caller drains incremental
+deltas instead of subscribing-then-immediately-unsubscribing on each call.
+
+`PresenceAnnouncement` is signed over a canonical-JSON serialization
+(fixed key order, `signature` field excluded) using the agent's secp256k1
+key. `PeerMap` rejects entries with an invalid signature or whose `agent_id`
+doesn't match the recovered pubkey.
+
+## Encrypted Tasks
+
+When both ends carry `IntroBundle`s, `send_task_to(&task, Some(&peer_card))`
+auto-derives a ChaCha20-Poly1305 session key via X25519 ECDH and ships the
+task as an `EncryptedTask` envelope. `poll_tasks()` decrypts transparently
+when the local node has the matching identity. No session-key rotation —
+each task gets a fresh nonce off the same shared secret. See
+`examples/logos_delivery_encrypted.rs` for the end-to-end flow.
+
+## Streaming
+
+`respond_stream(task, chunks)` publishes each chunk on
+`/lmao/1/stream-{task_id}/proto` with a sequence number and an `is_final`
+flag on the last chunk. The receiver (`poll_stream_chunks(task_id)`) drains
+the cached subscription, and `reassemble_stream(task_id)` returns the
+concatenated text once `is_final` has arrived. Out-of-order delivery is
+handled by sorting on `seq` at reassembly time.
+
+## Delegation
 
 ```
-AgentIdentity (X25519)
-├── generate()                      → random keypair
-├── public_key_hex()                → hex-encoded pubkey
-├── shared_key(their_pubkey)        → SessionKey via ECDH
-└── from_hex(secret)                → reconstruct from secret
-
-SessionKey (ChaCha20-Poly1305)
-├── encrypt(plaintext)              → EncryptedPayload (nonce + ciphertext)
-└── decrypt(payload)                → plaintext bytes
-
-IntroBundle
-├── agent_pubkey: String
-└── version: String
+Orchestrator        PeerMap            Worker A / Worker B
+  │                    │                       │
+  │── delegate_task ──▶│                       │
+  │   (strategy,       │                       │
+  │    timeout_secs)   │                       │
+  │                    │  select peer(s):      │
+  │                    │   FirstAvailable      │
+  │                    │   CapabilityMatch     │
+  │                    │   BroadcastCollect    │
+  │                    │   RoundRobin          │
+  │                    │                       │
+  │── Task(subtask) ───┼──────────────────────▶│
+  │                    │                       │
+  │   poll_tasks loop  │                       │
+  │   up to timeout    │                       │
+  │                    │                       │
+  │◀── DelegationResult┼───────────────────────│
 ```
 
-## Presence Discovery
+Strategy selection is fully client-side; the worker just sees a normal
+`Task` on its inbox. `BroadcastCollect` returns one `DelegationResult` per
+responding peer; the others return exactly one.
 
-```
-Agent A                    Waku Network                  Agent B
-  │                            │                            │
-  │── PresenceAnnounce ───────▶│ /lmao/1/presence/proto     │
-  │   { pubkey, name,          │                            │
-  │     capabilities,          │                            │
-  │     timestamp }            │                            │
-  │                            │◀── PresenceAnnounce ───────│
-  │                            │                            │
-  │   PeerMap tracks all       │                            │
-  │   seen agents with TTL     │                            │
-  │   (auto-expire stale)      │                            │
-```
+## Storage Offload
 
-## Message Flow
+The node's `with_storage_offload(StorageOffloadConfig)` wraps any
+`StorageBackend` implementation. When a task's payload exceeds
+`max_inline_bytes` (default 100 KiB), the node uploads the bytes, replaces
+the inline content with a `storage_cid` reference, and ships the slim
+envelope. Receivers fetch on-demand. The audit-log upload performed by
+`lmao agent run` uses the same backend.
 
-```
-Agent A                    Waku Network                  Agent B
-  │                            │                            │
-  │── announce(AgentCard) ────▶│ /lmao/1/discovery/proto    │
-  │                            │◀── announce(AgentCard) ────│
-  │                            │                            │
-  │── discover() ─────────────▶│                            │
-  │◀── [AgentCard B] ─────────│                            │
-  │                            │                            │
-  │── send_task(Task) ────────▶│ /lmao/1/task-{B}/proto     │
-  │                            │──────── poll_tasks() ─────▶│
-  │                            │                            │
-  │   (SDS: wait for ACK)      │◀── send_ack(task.id) ─────│
-  │◀── ACK on /ack/{id}/proto─│                            │
-  │                            │                            │
-  │                            │◀── respond(result) ───────│
-  │◀── poll_tasks() ──────────│ /lmao/1/task-{A}/proto     │
-  │                            │                            │
-```
+| Backend                  | Feature flag    | Notes                                           |
+|--------------------------|-----------------|-------------------------------------------------|
+| `LibstorageBackend`      | `libstorage`    | Embedded Codex via storage-bindings 0.2.3 FFI. Default for the CLI. |
+| `LogosCoreStorageBackend`| `logos-core`    | Logos Core IPC via `storage_module`. For Basecamp host integration. |
+| `LogosStorageRest`       | (always)        | REST fallback when an external Codex node is preferred. |
 
 ## x402 Payment Flow
 
 ```
-Agent A (client)           Waku Network            Agent B (paywall)
-  │                            │                            │
-  │── send_task(request) ─────▶│───────────────────────────▶│
-  │                            │                            │
-  │◀── 402 PaymentRequired ───│◀───────────────────────────│
-  │   { token_contract,       │                            │
-  │     recipient, amount,    │                            │
-  │     network }             │                            │
-  │                            │                            │
-  │── ERC-20 transfer ────────▶│  (on-chain via execution)  │
-  │                            │                            │
-  │── send_task(request        │                            │
-  │   + payment_tx_hash) ────▶│───────────────────────────▶│
-  │                            │                     verify │
-  │                            │                   transfer │
-  │◀── Task(Completed) ───────│◀───────────────────────────│
+Client                  Worker (paywall)
+  │                          │
+  │── send_task(request) ────▶│
+  │                          │
+  │◀── 402 PaymentRequired ──│   { token_contract, recipient,
+  │                          │     amount, network }
+  │                          │
+  │── ERC-20 transfer ───────▶│   on Status Network (EVM via execution)
+  │                          │
+  │── send_task(request +    │
+  │     payment_tx_hash) ────▶│   verify on-chain
+  │                          │
+  │◀── Task(Completed) ──────│
 ```
 
-## Storage Offload Flow
+Payments are scoped to the `logos-messaging-a2a-execution` crate and gated
+on `with_payment(PaymentConfig)`. The default build does not require any
+EVM credentials.
+
+## Retry + SDS
+
+P2P transports are unreliable; LMAO defends in two layers:
+
+1. **SDS** (`logos-messaging-a2a-transport::sds`): per-message ACK,
+   bloom-filter dedup, lamport-ordered buffering. Up to 3 retransmissions,
+   ACK timeout 10 s.
+2. **RetryLayer** (`logos-messaging-a2a-node::retry`): wraps `send_reliable`
+   with exponential backoff (`base × 2^n`, capped at `max_delay_ms`,
+   optional jitter). Only **transport errors** are retried — un-ACKed
+   `Ok` results are left to SDS.
+
+Configure via `LmaoNode::with_retry(RetryConfig { max_attempts: 5,
+base_delay_ms: 1000, max_delay_ms: 60_000, jitter: true })`.
+
+## Basecamp Module Pair
+
+Two installable LGX packages live under `basecamp/`:
+
+- **`agent`** (universal core, `type: core`, `interface: universal`) —
+  C++ host that spawns `lmao agent run` as a child and proxies
+  `Q_INVOKABLE` calls through the same Unix-socket IPC the CLI uses.
+- **`agent_ui`** (`type: ui_qml`) — pure QML view with four panes
+  (Status, Peers, Delegate, Audit). Calls `logos.callModule("agent",
+  method, args)` for everything.
 
 ```
-Agent A                    Codex Node               Agent B
-  │                            │                       │
-  │  payload > 100KB           │                       │
-  │── upload(data) ───────────▶│                       │
-  │◀── CID ───────────────────│                       │
-  │                            │                       │
-  │── Task { storage_cid }    │                       │
-  │   via Waku ───────────────┼──────────────────────▶│
-  │                            │                       │
-  │                            │◀── download(CID) ────│
-  │                            │── data ──────────────▶│
+Basecamp host                 agent module                lmao agent run
+                              (universal core)            (subprocess)
+  ┌──────────────┐
+  │  agent_ui    │  Q_INVOKABLE
+  │  (QML view)  │ ───────────────▶ ┌──────────────┐
+  │              │                  │  agent_impl  │   IPC over
+  │              │                  │  QLocalSocket│ ─────────────▶ lmao.sock
+  │              │ ◀─────────────── │              │
+  └──────────────┘   JSON results   └──────┬───────┘                  │
+                                           │  spawn on init           │
+                                           ▼                          │
+                                     `lmao agent run …`  ◀────────────┘
+                                     (one process per agent)
 ```
 
-## Message Retry with Exponential Backoff
+The IPC contract is identical to the CLI: the module is just another
+client of the daemon socket.
 
-P2P transports are inherently unreliable. The retry layer wraps the SDS
-`send_reliable` path and replays failed sends with exponential backoff.
+## MCP Bridge
 
-```
-RetryConfig
-├── max_attempts: u32          default 5
-├── base_delay_ms: u64         default 1 000 ms
-├── max_delay_ms: u64          default 60 000 ms
-└── jitter: bool               default true
-```
+`logos-messaging-a2a-mcp` exposes the agent fleet as MCP tools to hosts
+like Claude Desktop or Cursor. Stdio transport, no HTTP server.
 
-Delay for attempt `n` (0-indexed):
+| Tool                | Description                                        |
+|---------------------|----------------------------------------------------|
+| `discover_agents`   | Drain discovery topic, cache, return AgentCards.   |
+| `send_to_agent`     | Send a task by agent name, poll for the response.  |
+| `list_cached_agents`| Return cache without a network round-trip.         |
 
-```
-min(base_delay_ms × 2^n, max_delay_ms)  [+ random jitter]
-```
+Configured via CLI flags: `--waku-url` (REST endpoint when using the
+`rest` feature), `--timeout` (response wait, default 30 s).
 
-```
-                        RetryLayer<T: Transport>
-                               │
-           attempt 0           │
-   send_reliable() ───────────▶│──── Ok ──▶ return
-                               │
-                          Err? │
-                               ▼
-                   sleep(base_delay_ms)
-                               │
-           attempt 1           │
-   send_reliable() ───────────▶│──── Ok ──▶ return
-                               │
-                          Err? │
-                               ▼
-                  sleep(base_delay_ms × 2)
-                               │
-              ...              │
-                               │
-       attempt max_attempts-1  │
-   send_reliable() ───────────▶│──── Ok ──▶ return
-                               │
-                          Err? │
-                               ▼
-                    return final error
-```
+## Topic Format Constraint
 
-Key design points:
-- Only **transport errors** (`Err`) are retried. A successful send that is
-  not ACKed (`Ok((_, false))`) is left to the SDS retransmission loop.
-- Jitter adds a uniform random offset in `[0, base_delay] / 2` to avoid
-  thundering-herd problems when many agents retry simultaneously.
-- Enable via `LmaoNode::with_retry(RetryConfig { ... })`.
+The Logos Messaging transport requires content topics to have **exactly
+four segments**: `/<app>/<generation>/<name>/<encoding>`. Earlier drafts
+used five-segment topics (`/lmao/1/task/{pubkey}/proto`), but
+liblogosdelivery rejects those — the second segment must parse as a
+numeric generation. The current convention squashes type and id into a
+single `name` segment with a hyphen separator: `task-{pubkey}`,
+`stream-{task_id}`, `ack-{msg_id}`.
 
-Implementation:
-- `logos-messaging-a2a-core::RetryConfig` — configuration type.
-- `logos-messaging-a2a-node::retry::RetryLayer` — the retry wrapper.
-
-## Waku Presence Broadcasts
-
-Agents periodically broadcast `PresenceAnnouncement` messages on the
-well-known topic `/lmao/1/presence/proto`. Peers listen, build a live
-`PeerMap`, and query it by capability.
-
-```
-PresenceAnnouncement
-├── agent_id: String           secp256k1 compressed pubkey hex
-├── name: String               human-readable agent name
-├── capabilities: Vec<String>  e.g. ["summarize", "translate"]
-├── waku_topic: String         where this agent receives tasks
-├── ttl_secs: u64              validity window
-└── signature: Option<Vec<u8>> secp256k1 over canonical JSON
-```
-
-### Signature Verification
-
-Announcements are signed over a **canonical JSON** serialization (fixed
-key order, `signature` field excluded) using the agent's secp256k1 key.
-Verifiers decode `agent_id` to a public key and check the DER-encoded
-signature, rejecting tampered or spoofed announcements.
-
-### PeerMap
-
-```
-PeerMap (Mutex<HashMap<agent_id, PeerInfo>>)
-│
-├── update(announcement)       insert / refresh an entry
-├── get(agent_id)              lookup, returns None if expired
-├── find_by_capability(cap)    filter live peers by capability
-├── all_live()                 all non-expired peers
-└── evict_expired()            garbage-collect stale entries
-```
-
-Entries expire when `now - last_seen > ttl_secs`. A TTL of 0 means the
-entry is always considered expired (useful for one-shot announcements).
-Expired entries are lazily filtered on read and batch-removed via
-`evict_expired()`.
-
-### Combined Discovery
-
-`LmaoNode::discover_all()` merges two discovery sources and
-deduplicates by public key:
-
-```
-                  ┌───────────────────────┐
-                  │   discover_all()       │
-                  └───────┬───────────────┘
-                          │
-              ┌───────────┼───────────────┐
-              ▼                           ▼
-   poll_presence()              registry.list_agents()
-   (Waku topic scan)           (persistent on-chain)
-              │                           │
-              └───────────┬───────────────┘
-                          ▼
-                 deduplicate by pubkey
-                          │
-                          ▼
-                  Vec<AgentCard>
-```
-
-Implementation:
-- `logos-messaging-a2a-core::PresenceAnnouncement` — wire type + signing.
-- `logos-messaging-a2a-node::presence::{PeerInfo, PeerMap}` — live peer tracking.
-
-## Task Delegation
-
-An orchestrator agent decomposes a parent task into subtasks and forwards
-each subtask to a peer chosen from the live `PeerMap`.
-
-```
-Orchestrator               PeerMap                  Worker A / Worker B
-  │                           │                           │
-  │── DelegationRequest ─────▶│                           │
-  │   { parent_task_id,       │  strategy:                │
-  │     subtask_text,         │  FirstAvailable           │
-  │     strategy,             │  CapabilityMatch("code")  │
-  │     timeout_secs }        │  BroadcastCollect         │
-  │                           │  RoundRobin               │
-  │                           │                           │
-  │   select peer(s) ◀───────│                           │
-  │                           │                           │
-  │── Task(subtask) ─────────┼──────────────────────────▶│
-  │   via transport.publish   │                           │
-  │                           │                           │
-  │   poll_tasks() loop       │                           │
-  │   (up to timeout_secs)    │                           │
-  │                           │                           │
-  │◀── DelegationResult ─────┼───────────────────────────│
-  │   { success, result_text, │                           │
-  │     agent_id, error }     │                           │
-```
-
-### Key types
-
-```
-DelegationStrategy (tagged enum)
-├── FirstAvailable                pick any live peer
-├── CapabilityMatch { capability } pick a peer with matching capability
-├── BroadcastCollect              send to all, collect every response
-└── RoundRobin                    rotate through peers with atomic counter
-
-DelegationRequest
-├── parent_task_id: String
-├── subtask_text: String
-├── strategy: DelegationStrategy
-└── timeout_secs: u64             (0 = default 30s)
-
-DelegationResult
-├── parent_task_id: String
-├── subtask_id: String
-├── agent_id: String              pubkey of the worker
-├── result_text: Option<String>
-├── success: bool
-└── error: Option<String>
-```
-
-Implementation:
-- `logos-messaging-a2a-core::delegation` — wire types.
-- `logos-messaging-a2a-node::delegation` — `delegate_task()` and `delegate_broadcast()`.
-
-## MCP Bridge Architecture
-
-The MCP bridge (`logos-messaging-a2a-mcp`) exposes discovered Waku A2A
-agents as MCP tools, letting MCP hosts like Claude Desktop or Cursor
-interact with the decentralized agent fleet.
-
-```
-┌─────────────────┐   stdio    ┌──────────────────────────┐   Waku    ┌──────────────┐
-│   MCP Host      │◀─────────▶│   LogosA2ABridge          │◀────────▶│  Agent Fleet  │
-│  (Claude, etc.) │            │                          │           │  (Waku P2P)   │
-│                 │            │  ┌────────────────────┐  │           │               │
-│  discover_agents│───────────▶│  │ LmaoNode<T>     │  │           │  Agent A      │
-│  send_to_agent  │            │  │  .discover()       │──┼──────────▶│  Agent B      │
-│  list_cached    │            │  │  .send_text()      │  │           │  Agent C      │
-│                 │            │  │  .poll_tasks()     │  │           │               │
-│                 │◀───────────│  └────────────────────┘  │           │               │
-│   tool results  │            │                          │           │               │
-│                 │            │  AgentRegistry (cache)    │           │               │
-└─────────────────┘            └──────────────────────────┘           └──────────────┘
-```
-
-### MCP Tools
-
-| Tool                | Description                                             |
-|---------------------|---------------------------------------------------------|
-| `discover_agents`   | Poll the Waku discovery topic; cache and return agents  |
-| `send_to_agent`     | Send a message to a named agent and poll for a response |
-| `list_cached_agents`| Return cached agents without a network call             |
-
-### Request Flow
-
-```
-Claude Desktop            MCP Bridge                  Waku Network
-  │                          │                            │
-  │── discover_agents ──────▶│                            │
-  │                          │── node.discover() ────────▶│
-  │                          │◀── Vec<AgentCard> ────────│
-  │                          │   cache in AgentRegistry   │
-  │◀── agent list ──────────│                            │
-  │                          │                            │
-  │── send_to_agent ────────▶│                            │
-  │   { name, message }      │── lookup name in cache     │
-  │                          │── node.send_text() ───────▶│
-  │                          │                            │
-  │                          │── poll loop (2s interval)  │
-  │                          │── node.poll_tasks() ──────▶│
-  │                          │◀── Task(Completed) ───────│
-  │◀── agent response ─────│                            │
-```
-
-The bridge runs as a stdio server (`rmcp` transport-io) — no HTTP server
-is involved. It is configured via CLI flags:
-
-- `--waku-url` — nwaku REST API endpoint (default `http://localhost:8645`)
-- `--timeout` — seconds to wait for agent responses (default `30`)
+See `crates/logos-messaging-a2a-core/src/topics.rs` for the canonical
+encoders.
