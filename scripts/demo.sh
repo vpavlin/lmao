@@ -126,8 +126,10 @@ sleep 12
 
 echo
 echo "[3/4] discovering peers via presence…"
+# Window must comfortably exceed agent re-announce interval (default 15s)
+# AND give this freshly-spawned client time to dial the logos.dev mesh.
 "$BIN" --transport logos-delivery --tcp-port 60012 --udp-port 9012 \
-  presence peers --timeout 8 2>&1 | "${LOG_FILTER[@]}"
+  presence peers --timeout 25 2>&1 | "${LOG_FILTER[@]}"
 
 echo
 echo "[4/4] delegating a task by capability=code → bob…"
