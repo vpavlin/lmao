@@ -112,13 +112,17 @@ echo "  bob socket:   $BOB_SOCKET"
 # announcement (and vice versa) in its PeerMap.
 sleep 18
 
+# All daemon-socket calls go through the host-side `lmao` (not the
+# in-container one). Stderr from the host CLI is clean; the noisy
+# libp2p / nim-waku DBG/INF stream comes from inside the containers
+# and never reaches us, so no log filter needed here.
 echo
 echo "[3/5] daemon status for alice (via host → container socket)…"
-"$BIN" --daemon-socket "$ALICE_SOCKET" daemon status | sed 's/^/  /'
+"$BIN" --daemon-socket "$ALICE_SOCKET" daemon status 2>&1 | sed 's/^/  /'
 
 echo
 echo "[4/5] presence peers via alice's daemon…"
-"$BIN" --daemon-socket "$ALICE_SOCKET" presence peers --timeout 5 | sed 's/^/  /'
+"$BIN" --daemon-socket "$ALICE_SOCKET" presence peers --timeout 5 2>&1 | sed 's/^/  /'
 
 echo
 echo "[5/5] task delegate by capability=code → bob (via alice's daemon)…"
@@ -127,7 +131,7 @@ DELEGATE_OUT="$DEMO_DATA/delegate.out"
   task delegate \
     --capability code \
     --text "Review this snippet: fn main() { println!(\"hello\"); }" \
-    --timeout 25 | tee "$DELEGATE_OUT" | sed 's/^/  /'
+    --timeout 25 2>&1 | tee "$DELEGATE_OUT" | sed 's/^/  /'
 
 CID="$(grep -oE 'codex://[A-Za-z0-9]+' "$DELEGATE_OUT" | head -1 | sed 's|codex://||' || true)"
 if [[ -n "$CID" ]]; then

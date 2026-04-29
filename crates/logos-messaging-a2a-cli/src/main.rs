@@ -51,8 +51,38 @@ async fn main() -> Result<()> {
         return daemon_cmd::handle(action, daemon_socket.as_ref(), cli.json).await;
     }
 
-    let transport: Arc<dyn Transport> = build_transport(&cli).await?;
-    let storage: Option<Arc<dyn StorageBackend>> = build_storage(&cli).await?;
+    // Daemon-aware commands (task / presence / agent discover) probe
+    // the daemon socket first and short-circuit there. If a daemon is
+    // listening, building an embedded transport here is just expensive
+    // log noise. Skip the transport entirely in that case — handlers
+    // will fall through to their own ephemeral path on a socket-miss.
+    let agent_action_uses_daemon = matches!(cli.command, Commands::Agent { .. });
+    let daemon_can_handle = !agent_action_uses_daemon
+        && matches!(
+            cli.command,
+            Commands::Task { .. } | Commands::Presence { .. }
+        )
+        && daemon::DaemonClient::new(
+            daemon_socket
+                .clone()
+                .unwrap_or_else(daemon::default_socket_path),
+        )
+        .probe()
+        .await;
+
+    let transport: Arc<dyn Transport> = if daemon_can_handle {
+        // Placeholder. None of the daemon-aware code paths actually
+        // touch this transport — the handlers route through IPC and
+        // return before falling back to it.
+        Arc::new(logos_messaging_a2a_transport::memory::InMemoryTransport::new())
+    } else {
+        build_transport(&cli).await?
+    };
+    let storage: Option<Arc<dyn StorageBackend>> = if daemon_can_handle {
+        None
+    } else {
+        build_storage(&cli).await?
+    };
 
     match cli.command {
         Commands::Agent { action } => {
