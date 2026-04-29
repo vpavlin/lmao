@@ -76,8 +76,8 @@
 │  ├─────────────────────────────────────────────────────────┤         │
 │  │                                                         │         │
 │  │  NwakuRestTransport        LogosDeliveryTransport       │         │
-│  │  (v0.1 — REST fallback)    (planned — issue #57)        │         │
-│  │  http://localhost:8645     logos-delivery-rust-bindings  │         │
+│  │  (REST fallback)           (liblogosdelivery FFI)       │         │
+│  │  http://localhost:8645     preset: "logos.dev"          │         │
 │  │                                                         │         │
 │  └─────────────────────────┬──────────────────────────────┘         │
 │                            │                                         │

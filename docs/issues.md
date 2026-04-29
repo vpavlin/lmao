@@ -1,10 +1,27 @@
 # Follow-up Issues
 
-Pre-written GitHub issues for the logos-messaging-a2a project. File these after the v0.1 prototype is stable.
+> **Note:** GitHub Issues are now enabled on this repo. New work is tracked
+> at <https://github.com/vpavlin/lmao/issues>. The pre-written entries
+> below remain as a historical record — most are superseded by filed
+> issues, see annotations.
 
 ---
 
 ## Issue #1: Use logos-delivery-rust-bindings as primary transport
+
+**Status:** ⚠️ SUPERSEDED by [GitHub issue #1](https://github.com/vpavlin/lmao/issues/1)
+— `feat: LogosDeliveryTransport via liblogosdelivery FFI`.
+
+The original plan targeted `logos-delivery-rust-bindings`, which wraps
+upstream `libwaku` and does not expose the `logos.dev` network preset.
+Replaced by a direct integration with
+[`liblogosdelivery`](https://github.com/logos-messaging/logos-delivery/tree/master/liblogosdelivery),
+which has `{"preset": "logos.dev"}` baked in (auto-wires entry nodes,
+cluster ID, sharding, content-topic→pubsub translation) — eliminating
+manual peer configuration at demo time.
+
+<details>
+<summary>Original (historical)</summary>
 
 **Labels:** `enhancement`, `transport`, `priority:high`
 
@@ -23,7 +40,7 @@ The v0.1 prototype uses the nwaku REST API (`http://localhost:8645`) because the
 - [ ] Make `LogosDeliveryTransport` the default, with `NwakuRestTransport` as opt-in fallback
 - [ ] Document build prerequisites in README
 
-**Link:** https://github.com/logos-messaging/logos-delivery-rust-bindings
+</details>
 
 ---
 

@@ -1,6 +1,6 @@
 # LMAO — Logos Module for Agent Orchestration
 
-[![codecov](https://codecov.io/gh/jimmy-claw/lmao/branch/master/graph/badge.svg)](https://codecov.io/gh/jimmy-claw/lmao)
+[![codecov](https://codecov.io/gh/vpavlin/lmao/branch/master/graph/badge.svg)](https://codecov.io/gh/vpavlin/lmao)
 
 > **LMAO** = **L**ogos **M**odule for **A**gent **O**rchestration
 >
@@ -270,15 +270,14 @@ LOGOS_CORE_LIB_DIR=/path/to/sdk/lib make demo-logos-core-real
 |-------|-------------|
 | `logos-messaging-a2a-crypto` | X25519 ECDH + ChaCha20-Poly1305 encryption |
 | `logos-messaging-a2a-core` | A2A types: `AgentCard`, `Task`, `Message`, `Part` |
-| `logos-messaging-a2a-transport` | `Transport` trait + nwaku REST + `InMemoryTransport` + `LogosCoreDeliveryTransport` + SDS reliability |
+| `logos-messaging-a2a-transport` | `Transport` trait + nwaku REST + `InMemoryTransport` + `LogosCoreDeliveryTransport` + `LogosDeliveryTransport` (liblogosdelivery FFI) + SDS reliability |
 | `logos-messaging-a2a-storage` | `StorageBackend` trait + Logos Storage (Codex) REST + `LogosCoreStorageBackend` |
 | `logos-messaging-a2a-node` | A2A node: announce, discover, send/receive tasks, presence, payments, delegation |
-| `logos-messaging-a2a-execution` | `ExecutionBackend` trait + Status Network (EVM) + LEZ backends for on-chain payments & agent registration |
+| `logos-messaging-a2a-execution` | `ExecutionBackend` trait + Status Network (EVM) + LEZ stub (registration / payments) |
 | `logos-messaging-a2a-cli` | CLI for interacting with the network |
 | `logos-messaging-a2a-mcp` | MCP bridge — expose agents as tools for Claude, Cursor, etc. |
 | `logos-messaging-a2a-ffi` | C FFI bridge for Logos Core Qt module integration |
 | `lmao-ffi` | High-level C FFI wrapper (simpler API for embedders) |
-| `logos-messaging-a2a-execution` | On-chain execution: `ExecutionBackend` trait + Status Network (EVM) + LEZ stub |
 
 ## CLI
 
@@ -615,7 +614,8 @@ module/
 - [x] `LogosCoreDeliveryTransport` — native delivery_module IPC transport
 - [x] `LogosCoreStorageBackend` — native storage_module IPC backend
 - [x] Logos Core e2e demo (stub + real SDK support)
-- [x] libwaku FFI —  via  feature (no separate nwaku process)
+- [x] libwaku FFI — via `native-waku` feature (no separate nwaku process)
+- [x] `LogosDeliveryTransport` — embedded Logos Messaging node via `liblogosdelivery` FFI (`logos-delivery` feature, `logos.dev` preset)
 - [x] CID-based large payload offloading to Logos Storage
 - [x] Full SDS protocol — bloom filters, causal ordering, batch ACK, repair requests
 - [x] Waku presence broadcasts — PeerMap discovery via well-known topic
