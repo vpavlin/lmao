@@ -173,6 +173,123 @@ mod tests {
         assert!(s.contains("\"kind\":\"info\""));
     }
 
+    /// All Request variants survive a JSON round-trip. Re-serializes
+    /// after parsing and compares the strings — locks the wire format
+    /// to the type definition.
+    #[test]
+    fn round_trip_all_request_variants() {
+        let cases = vec![
+            Request::Info,
+            Request::Discover,
+            Request::PresencePeers {
+                capability: Some("text".into()),
+            },
+            Request::PresencePeers { capability: None },
+            Request::TaskSend {
+                to: "02ab".into(),
+                text: "hi".into(),
+            },
+            Request::TaskStatus { id: "uuid".into() },
+            Request::TaskDelegate {
+                to: None,
+                capability: Some("code".into()),
+                text: "do".into(),
+                parent_id: "p".into(),
+                timeout_secs: 30,
+                broadcast: false,
+                strategy: Some("capability_match".into()),
+            },
+            Request::StorageFetch { cid: "Q...".into() },
+            Request::Shutdown,
+        ];
+        for req in cases {
+            let s = serde_json::to_string(&req).unwrap();
+            let parsed: Request = serde_json::from_str(&s).unwrap();
+            assert_eq!(s, serde_json::to_string(&parsed).unwrap());
+        }
+    }
+
+    /// All Response variants survive a JSON round-trip.
+    #[test]
+    fn round_trip_all_response_variants() {
+        let cases = vec![
+            Response::Info {
+                name: "alice".into(),
+                pubkey: "02ab".into(),
+                capabilities: vec!["text".into()],
+                uptime_secs: 7,
+                socket_path: PathBuf::from("/tmp/lmao.sock"),
+                storage_enabled: false,
+            },
+            Response::Discover {
+                agents: vec![AgentCardWire {
+                    name: "bob".into(),
+                    description: "echo".into(),
+                    version: "0.1.0".into(),
+                    capabilities: vec!["text".into()],
+                    public_key: "02cd".into(),
+                    has_intro_bundle: true,
+                }],
+            },
+            Response::PresencePeers {
+                peers: vec![PeerWire {
+                    agent_id: "02cd".into(),
+                    name: "bob".into(),
+                    capabilities: vec!["text".into()],
+                    waku_topic: "/lmao/1/task-02cd/proto".into(),
+                    last_seen_secs: 3,
+                    ttl_secs: 60,
+                }],
+            },
+            Response::TaskSend {
+                task_id: "u1".into(),
+                from: "02ab".into(),
+                acked: true,
+            },
+            Response::TaskStatus {
+                results: vec![TaskWire {
+                    id: "u1".into(),
+                    state: "completed".into(),
+                    from: "02ab".into(),
+                    to: "02cd".into(),
+                    text: Some("hi".into()),
+                    result_text: Some("ok".into()),
+                }],
+            },
+            Response::TaskDelegate {
+                results: vec![DelegationWire {
+                    parent_task_id: "p".into(),
+                    subtask_id: "s".into(),
+                    agent_id: "02cd".into(),
+                    success: true,
+                    result_text: Some("done".into()),
+                    error: None,
+                }],
+            },
+            Response::StorageFetch {
+                cid: "Q...".into(),
+                payload_b64: "aGVsbG8=".into(),
+            },
+            Response::ShutdownAck,
+            Response::Error {
+                message: "boom".into(),
+            },
+        ];
+        for resp in cases {
+            let s = serde_json::to_string(&resp).unwrap();
+            let parsed: Response = serde_json::from_str(&s).unwrap();
+            assert_eq!(s, serde_json::to_string(&parsed).unwrap());
+        }
+    }
+
+    /// MAX_FRAME_BYTES is enforced in the framing layer, but lock its
+    /// value here so a bump to the constant requires looking at this
+    /// test (and thus the security implications).
+    #[test]
+    fn max_frame_is_sixteen_mib() {
+        assert_eq!(MAX_FRAME_BYTES, 16 * 1024 * 1024);
+    }
+
     #[test]
     fn default_socket_uses_xdg_runtime_dir() {
         // SAFETY: tests are single-threaded by default in cargo test;

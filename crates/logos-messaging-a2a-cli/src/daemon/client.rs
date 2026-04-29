@@ -8,10 +8,10 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-use super::protocol::{Request, Response, MAX_FRAME_BYTES};
+use super::frame::{read_frame, write_frame};
+use super::protocol::{Request, Response};
 
 /// Lightweight client that connects per-request. There's no connection
 /// pool because the CLI commands are short-lived and each issues at most
@@ -45,31 +45,4 @@ impl DaemonClient {
         }
         Ok(response)
     }
-}
-
-async fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
-    let mut len_buf = [0u8; 4];
-    stream
-        .read_exact(&mut len_buf)
-        .await
-        .context("reading frame length")?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_FRAME_BYTES {
-        return Err(anyhow!("frame too large: {len} bytes"));
-    }
-    let mut body = vec![0u8; len];
-    stream
-        .read_exact(&mut body)
-        .await
-        .context("reading frame body")?;
-    serde_json::from_slice(&body).context("parsing frame body")
-}
-
-async fn write_frame<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
-    let body = serde_json::to_vec(value)?;
-    let len = body.len() as u32;
-    stream.write_all(&len.to_le_bytes()).await?;
-    stream.write_all(&body).await?;
-    stream.flush().await?;
-    Ok(())
 }

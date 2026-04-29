@@ -9,12 +9,10 @@ use logos_messaging_a2a_transport::Transport;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-use super::protocol::{
-    AgentCardWire, DelegationWire, PeerWire, Request, Response, TaskWire, MAX_FRAME_BYTES,
-};
+use super::frame::{read_frame, write_frame};
+use super::protocol::{AgentCardWire, DelegationWire, PeerWire, Request, Response, TaskWire};
 
 /// Background server attached to an `lmao agent run` process. Holds an
 /// `Arc<LmaoNode>` (shared with the inbox loop) and an optional storage
@@ -87,7 +85,7 @@ impl DaemonServer {
     }
 
     async fn handle_connection(self: Arc<Self>, mut stream: UnixStream) -> Result<()> {
-        let req = read_frame::<Request>(&mut stream).await?;
+        let req: Request = read_frame(&mut stream).await?;
         let resp = match self.dispatch(req).await {
             Ok(r) => r,
             Err(e) => Response::Error {
@@ -260,33 +258,6 @@ fn build_strategy(
             None => DelegationStrategy::FirstAvailable,
         },
     }
-}
-
-async fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
-    let mut len_buf = [0u8; 4];
-    stream
-        .read_exact(&mut len_buf)
-        .await
-        .context("reading frame length")?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_FRAME_BYTES {
-        return Err(anyhow!("frame too large: {len} bytes"));
-    }
-    let mut body = vec![0u8; len];
-    stream
-        .read_exact(&mut body)
-        .await
-        .context("reading frame body")?;
-    serde_json::from_slice(&body).context("parsing frame body")
-}
-
-async fn write_frame<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
-    let body = serde_json::to_vec(value)?;
-    let len = body.len() as u32;
-    stream.write_all(&len.to_le_bytes()).await?;
-    stream.write_all(&body).await?;
-    stream.flush().await?;
-    Ok(())
 }
 
 #[cfg(unix)]

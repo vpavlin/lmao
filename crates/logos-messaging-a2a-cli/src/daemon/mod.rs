@@ -19,6 +19,7 @@
 //! buffer all chunks server-side and return them in a single response.
 
 pub mod client;
+mod frame;
 pub mod protocol;
 pub mod server;
 
