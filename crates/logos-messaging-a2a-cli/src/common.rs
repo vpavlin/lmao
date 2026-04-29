@@ -1,5 +1,5 @@
 use anyhow::Result;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ pub struct IdentityConfig {
     pub encrypt: bool,
 }
 
-/// Build a [`WakuA2ANode`] using the global identity flags.
+/// Build a [`LmaoNode`] using the global identity flags.
 ///
 /// When `--keyfile` is provided, the node loads (or creates) a persistent
 /// signing key so that every CLI invocation shares the same pubkey and
@@ -31,13 +31,13 @@ pub fn build_node(
     capabilities: Vec<String>,
     transport: LogosMessagingTransport,
     identity: &IdentityConfig,
-) -> Result<WakuA2ANode<LogosMessagingTransport>> {
+) -> Result<LmaoNode<LogosMessagingTransport>> {
     let node = if let Some(ref path) = identity.keyfile {
-        WakuA2ANode::from_keyfile(name, description, capabilities, transport, path)?
+        LmaoNode::from_keyfile(name, description, capabilities, transport, path)?
     } else if identity.encrypt {
-        WakuA2ANode::new_encrypted(name, description, capabilities, transport)
+        LmaoNode::new_encrypted(name, description, capabilities, transport)
     } else {
-        WakuA2ANode::new(name, description, capabilities, transport)
+        LmaoNode::new(name, description, capabilities, transport)
     };
     Ok(node)
 }

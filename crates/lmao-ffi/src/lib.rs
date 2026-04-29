@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::OnceLock;
 
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
 use tokio::runtime::Runtime;
 
@@ -18,17 +18,17 @@ fn runtime() -> &'static Runtime {
 }
 
 /// Global node instance (lazy-initialized on first call).
-static NODE: OnceLock<WakuA2ANode<LogosMessagingTransport>> = OnceLock::new();
+static NODE: OnceLock<LmaoNode<LogosMessagingTransport>> = OnceLock::new();
 
 /// Returns a reference to the lazily-initialized global node, creating it on the
 /// first call using the `WAKU_URL` environment variable (defaults to `http://localhost:8645`).
 /// The node is announced on the Waku network as part of initialization.
-fn get_or_init_node() -> &'static WakuA2ANode<LogosMessagingTransport> {
+fn get_or_init_node() -> &'static LmaoNode<LogosMessagingTransport> {
     NODE.get_or_init(|| {
         let waku_url =
             std::env::var("WAKU_URL").unwrap_or_else(|_| "http://localhost:8645".to_string());
         let transport = LogosMessagingTransport::new(&waku_url);
-        let node = WakuA2ANode::new(
+        let node = LmaoNode::new(
             "lmao-agent",
             "LMAO A2A agent via Logos Core",
             vec!["text".to_string()],

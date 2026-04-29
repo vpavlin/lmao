@@ -2,9 +2,9 @@ use logos_messaging_a2a_core::{topics, AgentCard, Task};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{Result, WakuA2ANode};
+use crate::{Result, LmaoNode};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Respond to a task: send back a completed task with result.
     ///
     /// Uses SDS causal send (maintains ordering, includes bloom filter
@@ -37,7 +37,7 @@ impl<T: Transport> WakuA2ANode<T> {
 #[cfg(test)]
 mod tests {
     use crate::tasks::test_support::{fast_config, MockTransport};
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, Task};
 
     #[tokio::test]
@@ -45,7 +45,7 @@ mod tests {
         let transport = MockTransport::new();
         let published = transport.published.clone();
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -56,7 +56,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let spk = sender.pubkey().to_string();
         let _ = sender.poll_tasks().await.unwrap();
 
@@ -85,7 +85,7 @@ mod tests {
         let transport = MockTransport::new();
         let published = transport.published.clone();
 
-        let receiver = WakuA2ANode::new_encrypted(
+        let receiver = LmaoNode::new_encrypted(
             "enc-receiver",
             "encrypted receiver",
             vec![],
@@ -95,7 +95,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::new_encrypted("enc-sender", "encrypted sender", vec![], transport.clone());
+            LmaoNode::new_encrypted("enc-sender", "encrypted sender", vec![], transport.clone());
         let spk = sender.pubkey().to_string();
         let _ = sender.poll_tasks().await.unwrap();
 
@@ -133,12 +133,12 @@ mod tests {
         let transport = MockTransport::new();
 
         let server =
-            WakuA2ANode::with_config("server", "server", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("server", "server", vec![], transport.clone(), fast_config());
         let spk = server.pubkey().to_string();
         let _ = server.poll_tasks().await.unwrap();
 
         let client =
-            WakuA2ANode::with_config("client", "client", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("client", "client", vec![], transport.clone(), fast_config());
         let cpk = client.pubkey().to_string();
         let _ = client.poll_tasks().await.unwrap();
 

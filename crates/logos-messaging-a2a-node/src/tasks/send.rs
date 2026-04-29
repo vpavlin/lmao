@@ -3,9 +3,9 @@ use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
 use crate::retry;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{NodeError, Result, LmaoNode};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Send a task to another agent. Uses SDS reliable delivery with
     /// causal ordering, bloom filter, and retransmission.
     pub async fn send_task(&self, task: &Task) -> Result<bool> {
@@ -89,14 +89,14 @@ impl<T: Transport> WakuA2ANode<T> {
 #[cfg(test)]
 mod tests {
     use crate::tasks::test_support::{fast_config, MockTransport};
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
 
     #[tokio::test]
     async fn test_send_text_creates_and_sends_task() {
         let transport = MockTransport::new();
         let published = transport.published.clone();
         let node =
-            WakuA2ANode::with_config("sender", "sender node", vec![], transport, fast_config());
+            LmaoNode::with_config("sender", "sender node", vec![], transport, fast_config());
 
         let task = node.send_text("02deadbeef", "hello world").await.unwrap();
         assert_eq!(task.from, node.pubkey());
@@ -109,7 +109,7 @@ mod tests {
     async fn test_send_in_session() {
         let transport = MockTransport::new();
         let published = transport.published.clone();
-        let node = WakuA2ANode::new("test", "test agent", vec![], transport);
+        let node = LmaoNode::new("test", "test agent", vec![], transport);
         let session = node.create_session("02deadbeef");
         let task = node.send_in_session(&session.id, "hello").await.unwrap();
         assert_eq!(task.session_id, Some(session.id.clone()));
@@ -125,7 +125,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_in_nonexistent_session() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::new("test", "test agent", vec![], transport);
+        let node = LmaoNode::new("test", "test agent", vec![], transport);
         let result = node.send_in_session("nonexistent", "hello").await;
         assert!(result.is_err());
     }
@@ -133,7 +133,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_in_nonexistent_session_error_message() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::new("test", "test agent", vec![], transport);
+        let node = LmaoNode::new("test", "test agent", vec![], transport);
         let err = node
             .send_in_session("ghost-session", "hi")
             .await
@@ -148,7 +148,7 @@ mod tests {
     async fn test_send_text_received_by_peer() {
         let transport = MockTransport::new();
 
-        let alice = WakuA2ANode::with_config(
+        let alice = LmaoNode::with_config(
             "alice",
             "Alice",
             vec!["text".into()],
@@ -157,7 +157,7 @@ mod tests {
         );
         let apk = alice.pubkey().to_string();
 
-        let bob = WakuA2ANode::with_config(
+        let bob = LmaoNode::with_config(
             "bob",
             "Bob",
             vec!["text".into()],

@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
 
     {
         let node: tokio::sync::RwLockReadGuard<
-            logos_messaging_a2a_node::WakuA2ANode<LogosMessagingTransport>,
+            logos_messaging_a2a_node::LmaoNode<LogosMessagingTransport>,
         > = bridge.node.read().await;
         if let Err(e) = node.announce().await {
             tracing::warn!("Failed to announce bridge on network: {e}");

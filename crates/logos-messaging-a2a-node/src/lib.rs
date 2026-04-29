@@ -3,7 +3,7 @@
 //! This crate combines crypto ([`logos_messaging_a2a_crypto`]), transport
 //! ([`logos_messaging_a2a_transport`]), storage ([`logos_messaging_a2a_storage`]),
 //! and execution ([`logos_messaging_a2a_execution`]) into a single high-level
-//! [`WakuA2ANode`] that can announce, discover, send/receive tasks, manage
+//! [`LmaoNode`] that can announce, discover, send/receive tasks, manage
 //! sessions, stream responses, and handle payments over a Waku-compatible
 //! transport layer.
 
@@ -87,7 +87,7 @@ pub use metrics::MetricsSnapshot;
 ///
 /// Uses SDS MessageChannel for reliable, causally-ordered delivery with
 /// bloom filter deduplication and implicit ACK via remote bloom filters.
-pub struct WakuA2ANode<T: Transport> {
+pub struct LmaoNode<T: Transport> {
     /// This agent's public identity card, including name, capabilities, and public key.
     pub card: AgentCard,
     channel: MessageChannel<T>,
@@ -122,7 +122,7 @@ pub struct WakuA2ANode<T: Transport> {
     metrics: Metrics,
 }
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Create a new node with a random keypair (no encryption).
     pub fn new(name: &str, description: &str, capabilities: Vec<String>, transport: T) -> Self {
         let signing_key = SigningKey::random(&mut rand_core());
@@ -513,7 +513,7 @@ mod keyfile_tests {
         let key = SigningKey::random(&mut rand_core());
         let expected_pubkey = hex::encode(key.verifying_key().to_encoded_point(true).as_bytes());
 
-        let node = WakuA2ANode::new_with_key(
+        let node = LmaoNode::new_with_key(
             "test",
             "test agent",
             vec!["text".into()],
@@ -532,7 +532,7 @@ mod keyfile_tests {
 
         assert!(!path.exists());
 
-        let node = WakuA2ANode::from_keyfile(
+        let node = LmaoNode::from_keyfile(
             "test",
             "test agent",
             vec!["text".into()],
@@ -559,7 +559,7 @@ mod keyfile_tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("agent.key");
 
-        WakuA2ANode::from_keyfile("test", "test agent", vec![], make_transport(), &path).unwrap();
+        LmaoNode::from_keyfile("test", "test agent", vec![], make_transport(), &path).unwrap();
 
         let perms = std::fs::metadata(&path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
@@ -570,7 +570,7 @@ mod keyfile_tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("agent.key");
 
-        let node1 = WakuA2ANode::from_keyfile(
+        let node1 = LmaoNode::from_keyfile(
             "agent-a",
             "first",
             vec!["text".into()],
@@ -580,7 +580,7 @@ mod keyfile_tests {
         .unwrap();
         let pubkey1 = node1.pubkey().to_string();
 
-        let node2 = WakuA2ANode::from_keyfile(
+        let node2 = LmaoNode::from_keyfile(
             "agent-b",
             "second",
             vec!["code".into()],
@@ -600,7 +600,7 @@ mod keyfile_tests {
 
         // "First run" — generates key
         let pubkey_first = {
-            let node = WakuA2ANode::from_keyfile(
+            let node = LmaoNode::from_keyfile(
                 "bot",
                 "my bot",
                 vec!["text".into()],
@@ -614,7 +614,7 @@ mod keyfile_tests {
 
         // "Second run" — loads existing key
         let pubkey_second = {
-            let node = WakuA2ANode::from_keyfile(
+            let node = LmaoNode::from_keyfile(
                 "bot",
                 "my bot",
                 vec!["text".into()],
@@ -636,7 +636,7 @@ mod keyfile_tests {
         // Write 16 bytes (too short)
         std::fs::write(&path, "aabbccdd00112233aabbccdd00112233").unwrap();
 
-        match WakuA2ANode::from_keyfile("test", "test", vec![], make_transport(), &path) {
+        match LmaoNode::from_keyfile("test", "test", vec![], make_transport(), &path) {
             Err(e) => assert!(
                 e.to_string().contains("16 bytes, expected 32"),
                 "error should mention length: {}",
@@ -653,7 +653,7 @@ mod keyfile_tests {
 
         std::fs::write(&path, "not-valid-hex!!").unwrap();
 
-        match WakuA2ANode::from_keyfile("test", "test", vec![], make_transport(), &path) {
+        match LmaoNode::from_keyfile("test", "test", vec![], make_transport(), &path) {
             Err(e) => assert!(
                 e.to_string().contains("invalid hex"),
                 "error should mention hex: {}",
@@ -675,7 +675,7 @@ mod keyfile_tests {
         std::fs::write(&path, &hex_str).unwrap();
 
         let node =
-            WakuA2ANode::from_keyfile("test", "test", vec![], make_transport(), &path).unwrap();
+            LmaoNode::from_keyfile("test", "test", vec![], make_transport(), &path).unwrap();
 
         assert_eq!(node.pubkey(), expected_pubkey);
     }

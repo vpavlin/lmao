@@ -1,7 +1,7 @@
 //! Integration tests for multi-agent task delegation.
 
 use logos_messaging_a2a_core::{DelegationRequest, DelegationStrategy};
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use logos_messaging_a2a_transport::sds::ChannelConfig;
 use std::time::Duration;
@@ -20,9 +20,9 @@ async fn make_announced_node(
     name: &str,
     capabilities: Vec<&str>,
     transport: InMemoryTransport,
-) -> WakuA2ANode<InMemoryTransport> {
+) -> LmaoNode<InMemoryTransport> {
     let caps = capabilities.into_iter().map(String::from).collect();
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         name,
         &format!("{name} agent"),
         caps,
@@ -36,7 +36,7 @@ async fn make_announced_node(
 }
 
 /// Helper: run a simple echo-agent loop that responds to one task.
-async fn echo_once(node: &WakuA2ANode<InMemoryTransport>) {
+async fn echo_once(node: &LmaoNode<InMemoryTransport>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while tokio::time::Instant::now() < deadline {
         let tasks = node.poll_tasks().await.unwrap();
@@ -343,7 +343,7 @@ async fn delegation_result_carries_correct_subtask_id() {
 // ── Round-Robin Delegation Tests ──
 
 /// Helper: run an echo-agent loop that responds to N tasks.
-async fn echo_n(node: &WakuA2ANode<InMemoryTransport>, n: usize) {
+async fn echo_n(node: &LmaoNode<InMemoryTransport>, n: usize) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut count = 0;
     while count < n && tokio::time::Instant::now() < deadline {

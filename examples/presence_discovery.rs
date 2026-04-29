@@ -8,7 +8,7 @@
 //!   cargo run --example presence_discovery
 
 use anyhow::Result;
-use logos_messaging_a2a::{A2AEnvelope, InMemoryTransport, Task, Transport, WakuA2ANode};
+use logos_messaging_a2a::{A2AEnvelope, InMemoryTransport, Task, Transport, LmaoNode};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,13 +17,13 @@ async fn main() -> Result<()> {
     // ── 1. Create two agents sharing the same in-memory transport ───────
     let transport = InMemoryTransport::new();
 
-    let alice = WakuA2ANode::new(
+    let alice = LmaoNode::new(
         "alice",
         "Alice: asks questions",
         vec!["question-answering".to_string()],
         transport.clone(),
     );
-    let bob = WakuA2ANode::new(
+    let bob = LmaoNode::new(
         "bob",
         "Bob: answers questions",
         vec![

@@ -8,7 +8,7 @@
 //!   cargo run --example task_delegation
 
 use anyhow::Result;
-use logos_messaging_a2a::{DelegationRequest, DelegationStrategy, InMemoryTransport, WakuA2ANode};
+use logos_messaging_a2a::{DelegationRequest, DelegationStrategy, InMemoryTransport, LmaoNode};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,19 +17,19 @@ async fn main() -> Result<()> {
     // ── 1. Create three agents on the same in-memory transport ───────────
     let transport = InMemoryTransport::new();
 
-    let orchestrator = WakuA2ANode::new(
+    let orchestrator = LmaoNode::new(
         "orchestrator",
         "Orchestrator: decomposes and delegates tasks",
         vec!["orchestration".to_string()],
         transport.clone(),
     );
-    let summarizer = WakuA2ANode::new(
+    let summarizer = LmaoNode::new(
         "summarizer",
         "Summarizer: produces summaries",
         vec!["summarize".to_string()],
         transport.clone(),
     );
-    let translator = WakuA2ANode::new(
+    let translator = LmaoNode::new(
         "translator",
         "Translator: translates text",
         vec!["translate".to_string()],

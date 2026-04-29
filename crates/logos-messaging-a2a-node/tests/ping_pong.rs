@@ -1,7 +1,7 @@
 //! Integration test: two nodes communicating via InMemoryTransport.
 
 use logos_messaging_a2a_core::{topics, A2AEnvelope, Task};
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use logos_messaging_a2a_transport::Transport;
 use std::time::Duration;
@@ -10,8 +10,8 @@ use std::time::Duration;
 async fn test_discover_agents() {
     let transport = InMemoryTransport::new();
 
-    let node_a = WakuA2ANode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
-    let node_b = WakuA2ANode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
+    let node_a = LmaoNode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
+    let node_b = LmaoNode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
 
     // Node A announces
     node_a.announce().await.unwrap();
@@ -27,8 +27,8 @@ async fn test_discover_agents() {
 async fn test_ping_pong_plaintext() {
     let transport = InMemoryTransport::new();
 
-    let node_a = WakuA2ANode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
-    let node_b = WakuA2ANode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
+    let node_a = LmaoNode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
+    let node_b = LmaoNode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
 
     // Announce both
     node_a.announce().await.unwrap();
@@ -70,8 +70,8 @@ async fn test_ping_pong_plaintext() {
 async fn test_ping_pong_with_sds() {
     let transport = InMemoryTransport::new();
 
-    let node_a = WakuA2ANode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
-    let node_b = WakuA2ANode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
+    let node_a = LmaoNode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
+    let node_b = LmaoNode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
 
     // Ensure Node A is subscribed to its task topic before Node B sends
     node_a.poll_tasks().await.unwrap();
@@ -98,8 +98,8 @@ async fn test_round_trip_within_timeout() {
 
     let transport = InMemoryTransport::new();
 
-    let node_a = WakuA2ANode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
-    let node_b = WakuA2ANode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
+    let node_a = LmaoNode::new("agent-a", "Agent A", vec!["text".into()], transport.clone());
+    let node_b = LmaoNode::new("agent-b", "Agent B", vec!["text".into()], transport.clone());
 
     node_a.announce().await.unwrap();
     let agents = node_b.discover().await.unwrap();
@@ -134,13 +134,13 @@ async fn test_round_trip_within_timeout() {
 async fn test_encrypted_ping_pong() {
     let transport = InMemoryTransport::new();
 
-    let node_a = WakuA2ANode::new_encrypted(
+    let node_a = LmaoNode::new_encrypted(
         "agent-a",
         "Agent A (encrypted)",
         vec!["text".into()],
         transport.clone(),
     );
-    let node_b = WakuA2ANode::new_encrypted(
+    let node_b = LmaoNode::new_encrypted(
         "agent-b",
         "Agent B (encrypted)",
         vec!["text".into()],

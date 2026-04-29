@@ -1,12 +1,12 @@
-//! Streaming operations for [`WakuA2ANode`](crate::WakuA2ANode).
+//! Streaming operations for [`LmaoNode`](crate::LmaoNode).
 
 use logos_messaging_a2a_core::{topics, A2AEnvelope, Task, TaskStreamChunk};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{Result, WakuA2ANode};
+use crate::{Result, LmaoNode};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Publish a sequence of stream chunks for a task.
     ///
     /// Each string in `chunks` becomes a `TaskStreamChunk` with incrementing
@@ -91,7 +91,7 @@ impl<T: Transport> WakuA2ANode<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, Task, TaskStreamChunk};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::Transport;
@@ -99,8 +99,8 @@ mod tests {
     fn make_node_with_transport(
         name: &str,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
-        WakuA2ANode::new(
+    ) -> LmaoNode<InMemoryTransport> {
+        LmaoNode::new(
             name,
             &format!("{} agent", name),
             vec!["text".into()],

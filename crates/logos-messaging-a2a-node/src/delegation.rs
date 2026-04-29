@@ -9,12 +9,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::metrics::Metrics;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{NodeError, Result, LmaoNode};
 
 /// Default timeout for delegation when none is specified (30 seconds).
 const DEFAULT_DELEGATION_TIMEOUT_SECS: u64 = 30;
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Delegate a subtask to a single peer based on the delegation strategy.
     ///
     /// Looks up peers from the live peer map, picks one according to the
@@ -182,7 +182,7 @@ impl<T: Transport> WakuA2ANode<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{DelegationRequest, DelegationStrategy};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::sds::ChannelConfig;
@@ -203,9 +203,9 @@ mod tests {
         name: &str,
         capabilities: Vec<&str>,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
+    ) -> LmaoNode<InMemoryTransport> {
         let caps = capabilities.into_iter().map(String::from).collect();
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             name,
             &format!("{name} agent"),
             caps,
@@ -218,7 +218,7 @@ mod tests {
     }
 
     /// Poll for one incoming task and respond with an echo.
-    async fn echo_once(node: &WakuA2ANode<InMemoryTransport>) {
+    async fn echo_once(node: &LmaoNode<InMemoryTransport>) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         while tokio::time::Instant::now() < deadline {
             let tasks = node.poll_tasks().await.unwrap();
@@ -235,7 +235,7 @@ mod tests {
     }
 
     /// Poll for exactly `n` incoming tasks and respond to each.
-    async fn echo_n(node: &WakuA2ANode<InMemoryTransport>, n: usize) {
+    async fn echo_n(node: &LmaoNode<InMemoryTransport>, n: usize) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut count = 0;
         while count < n && tokio::time::Instant::now() < deadline {

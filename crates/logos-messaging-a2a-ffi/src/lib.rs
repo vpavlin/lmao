@@ -1,7 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 //! C FFI bridge for logos-messaging-a2a — enables Logos Core Qt module integration.
 //!
-//! Exposes WakuA2ANode operations via C-compatible functions.
+//! Exposes LmaoNode operations via C-compatible functions.
 //! The Qt module (C++) calls these functions to manage agents and messaging.
 
 use std::ffi::{CStr, CString};
@@ -10,7 +10,7 @@ use std::ptr;
 use std::sync::Mutex;
 
 use logos_messaging_a2a_core::Task;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
@@ -24,7 +24,7 @@ static RT: Lazy<Runtime> = Lazy::new(|| {
 });
 
 /// Global node instance (single-node FFI for now).
-static NODE: Lazy<Mutex<Option<WakuA2ANode<LogosMessagingTransport>>>> =
+static NODE: Lazy<Mutex<Option<LmaoNode<LogosMessagingTransport>>>> =
     Lazy::new(|| Mutex::new(None));
 
 /// Helper: allocate a C string the caller must free with waku_a2a_free_string.
@@ -57,9 +57,9 @@ pub unsafe extern "C" fn waku_a2a_init(
 
     let transport = LogosMessagingTransport::new(&url);
     let node = if encrypted {
-        WakuA2ANode::new_encrypted(&name, &desc, vec!["text".into()], transport)
+        LmaoNode::new_encrypted(&name, &desc, vec!["text".into()], transport)
     } else {
-        WakuA2ANode::new(&name, &desc, vec!["text".into()], transport)
+        LmaoNode::new(&name, &desc, vec!["text".into()], transport)
     };
 
     match NODE.lock() {

@@ -1,4 +1,4 @@
-//! Discovery, presence, and registry operations for [`WakuA2ANode`].
+//! Discovery, presence, and registry operations for [`LmaoNode`].
 
 use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement};
 use logos_messaging_a2a_transport::Transport;
@@ -6,9 +6,9 @@ use std::collections::HashMap;
 
 use crate::metrics::Metrics;
 use crate::presence;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{NodeError, Result, LmaoNode};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Broadcast this agent's card on the discovery topic.
     ///
     /// Discovery uses raw A2AEnvelope (not SDS-wrapped) since it's a
@@ -206,15 +206,15 @@ impl<T: Transport> WakuA2ANode<T> {
 
 #[cfg(test)]
 mod registry_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::registry::{AgentRegistry, InMemoryRegistry};
     use logos_messaging_a2a_core::AgentCard;
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use std::sync::Arc;
 
-    fn make_node(name: &str) -> WakuA2ANode<InMemoryTransport> {
+    fn make_node(name: &str) -> LmaoNode<InMemoryTransport> {
         let transport = InMemoryTransport::new();
-        WakuA2ANode::new(
+        LmaoNode::new(
             name,
             &format!("{} agent", name),
             vec!["test".into()],
@@ -226,7 +226,7 @@ mod registry_tests {
     async fn with_registry_builder() {
         let transport = InMemoryTransport::new();
         let registry = Arc::new(InMemoryRegistry::new());
-        let node = WakuA2ANode::new("test", "test agent", vec![], transport)
+        let node = LmaoNode::new("test", "test agent", vec![], transport)
             .with_registry(registry.clone());
         assert!(node.registry.is_some());
     }
@@ -294,7 +294,7 @@ mod registry_tests {
         registry.register(reg_card).await.unwrap();
 
         let node =
-            WakuA2ANode::new("discoverer", "disc", vec![], transport).with_registry(registry);
+            LmaoNode::new("discoverer", "disc", vec![], transport).with_registry(registry);
 
         let all = node.discover_all().await.unwrap();
         // Should find the registry agent
@@ -307,7 +307,7 @@ mod registry_tests {
         let registry = Arc::new(InMemoryRegistry::new());
 
         let node =
-            WakuA2ANode::new("self-node", "me", vec![], transport).with_registry(registry.clone());
+            LmaoNode::new("self-node", "me", vec![], transport).with_registry(registry.clone());
 
         // Register self in registry
         node.register_in_registry().await.unwrap();
@@ -328,7 +328,7 @@ mod registry_tests {
 
 #[cfg(test)]
 mod signed_presence_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, PresenceAnnouncement};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::Transport;
@@ -336,8 +336,8 @@ mod signed_presence_tests {
     fn make_node_with_transport(
         name: &str,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
-        WakuA2ANode::new(
+    ) -> LmaoNode<InMemoryTransport> {
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -448,16 +448,16 @@ mod signed_presence_tests {
 
 #[cfg(test)]
 mod announce_and_discover_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::sds::ChannelConfig;
     use logos_messaging_a2a_transport::Transport;
     use std::time::Duration;
 
-    fn make_node(name: &str) -> WakuA2ANode<InMemoryTransport> {
+    fn make_node(name: &str) -> LmaoNode<InMemoryTransport> {
         let transport = InMemoryTransport::new();
-        WakuA2ANode::new(
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -468,8 +468,8 @@ mod announce_and_discover_tests {
     fn make_node_with_transport(
         name: &str,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
-        WakuA2ANode::new(
+    ) -> LmaoNode<InMemoryTransport> {
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -677,7 +677,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn announce_presence_includes_capabilities_and_topic() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["summarize".into(), "code".into()],
@@ -808,14 +808,14 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn find_peers_by_capability_integration() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["summarize".into(), "text".into()],
             transport.clone(),
         );
-        let bob = WakuA2ANode::new("bob", "bob agent", vec!["code".into()], transport.clone());
-        let observer = WakuA2ANode::new(
+        let bob = LmaoNode::new("bob", "bob agent", vec!["code".into()], transport.clone());
+        let observer = LmaoNode::new(
             "observer",
             "observer agent",
             vec!["observe".into()],
@@ -881,7 +881,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn announce_discover_roundtrip_preserves_card_fields() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "Alice the summarizer",
             vec!["summarize".into(), "text".into()],
@@ -904,13 +904,13 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn full_discovery_lifecycle() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["text".into()],
             transport.clone(),
         );
-        let bob = WakuA2ANode::new("bob", "bob agent", vec!["code".into()], transport.clone());
+        let bob = LmaoNode::new("bob", "bob agent", vec!["code".into()], transport.clone());
 
         // Step 1: Announce agent cards
         alice.announce().await.unwrap();
@@ -1053,7 +1053,7 @@ mod announce_and_discover_tests {
     async fn poll_presence_updates_peer_map_on_re_announce() {
         let transport = InMemoryTransport::new();
 
-        let alice = WakuA2ANode::with_config(
+        let alice = LmaoNode::with_config(
             "alice",
             "alice agent",
             vec!["text".into(), "code".into()],
@@ -1121,21 +1121,21 @@ mod announce_and_discover_tests {
     async fn find_peers_by_capability_filters_correctly() {
         let transport = InMemoryTransport::new();
 
-        let text_agent = WakuA2ANode::with_config(
+        let text_agent = LmaoNode::with_config(
             "text-agent",
             "text agent",
             vec!["text".into()],
             transport.clone(),
             fast_config(),
         );
-        let code_agent = WakuA2ANode::with_config(
+        let code_agent = LmaoNode::with_config(
             "code-agent",
             "code agent",
             vec!["code".into()],
             transport.clone(),
             fast_config(),
         );
-        let multi_agent = WakuA2ANode::with_config(
+        let multi_agent = LmaoNode::with_config(
             "multi-agent",
             "multi agent",
             vec!["text".into(), "code".into()],
@@ -1188,7 +1188,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn discover_and_announce_roundtrip() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::with_config(
+        let alice = LmaoNode::with_config(
             "alice",
             "alice agent",
             vec!["summarize".into()],

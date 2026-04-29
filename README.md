@@ -134,17 +134,17 @@ No nwaku needed — this runs entirely in-memory:
 
 ```rust
 use anyhow::Result;
-use waku_a2a::{A2AEnvelope, InMemoryTransport, Task, Transport, WakuA2ANode};
+use logos_messaging_a2a::{A2AEnvelope, InMemoryTransport, Task, Transport, LmaoNode};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let transport = InMemoryTransport::new();
 
     // Create two agents on the same in-memory network
-    let alice = WakuA2ANode::new(
+    let alice = LmaoNode::new(
         "alice", "Greeting agent", vec!["text".into()], transport.clone(),
     );
-    let bob = WakuA2ANode::new(
+    let bob = LmaoNode::new(
         "bob", "Echo agent", vec!["text".into()], transport.clone(),
     );
 
@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
     let task = Task::new(alice.pubkey(), bob.pubkey(), "Hello from Alice!");
     let envelope = A2AEnvelope::Task(task.clone());
     let payload = serde_json::to_vec(&envelope)?;
-    let topic = waku_a2a::topics::task_topic(bob.pubkey());
+    let topic = logos_messaging_a2a::topics::task_topic(bob.pubkey());
     bob.poll_tasks().await?; // ensure Bob is subscribed
     transport.publish(&topic, &payload).await?;
 
@@ -329,14 +329,14 @@ automatically offloads it to Logos Storage (Codex) and sends only the CID in
 the Waku envelope. The receiver fetches the full payload by CID transparently.
 
 ```rust
-use logos_messaging_a2a_node::{StorageOffloadConfig, WakuA2ANode};
+use logos_messaging_a2a_node::{StorageOffloadConfig, LmaoNode};
 use logos_messaging_a2a_storage::StorageBackend;
 use std::sync::Arc;
 
 // Any StorageBackend impl works: LogosStorageRest, LibstorageBackend, etc.
 let storage: Arc<dyn StorageBackend> = /* your backend */;
 
-let node = WakuA2ANode::new("agent", "my agent", vec![], transport)
+let node = LmaoNode::new("agent", "my agent", vec![], transport)
     .with_storage_offload(StorageOffloadConfig::new(storage));
 // Large payloads are now offloaded automatically on send and fetched on receive.
 ```
@@ -349,12 +349,12 @@ routing tasks — no central registry needed.
 
 ```rust
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 
 // Create two agents on a shared transport
 let transport = InMemoryTransport::new();
-let alice = WakuA2ANode::new("alice", "Alice agent", vec!["summarize".into()], transport.clone());
-let bob = WakuA2ANode::new("bob", "Bob agent", vec!["code".into()], transport.clone());
+let alice = LmaoNode::new("alice", "Alice agent", vec!["summarize".into()], transport.clone());
+let bob = LmaoNode::new("bob", "Bob agent", vec!["code".into()], transport.clone());
 
 // Alice announces presence (TTL = 5 min by default)
 alice.announce_presence().await?;
@@ -379,14 +379,14 @@ when the agent is offline.
 
 ```rust
 use logos_messaging_a2a_core::registry::{AgentRegistry, InMemoryRegistry};
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use std::sync::Arc;
 
 let transport = InMemoryTransport::new();
 let registry = Arc::new(InMemoryRegistry::new());
 
-let node = WakuA2ANode::new("echo", "Echo agent", vec!["echo".into()], transport)
+let node = LmaoNode::new("echo", "Echo agent", vec!["echo".into()], transport)
     .with_registry(registry.clone());
 
 // Register once — persists across restarts
@@ -413,11 +413,11 @@ require payment before processing tasks, and senders can auto-pay via an
 `ExecutionBackend`.
 
 ```rust
-use logos_messaging_a2a_node::{PaymentConfig, WakuA2ANode};
+use logos_messaging_a2a_node::{PaymentConfig, LmaoNode};
 use std::sync::Arc;
 
 // Receiver: require 100 tokens per task, verify on-chain
-let receiver = WakuA2ANode::new("service", "Paid service", vec![], transport.clone())
+let receiver = LmaoNode::new("service", "Paid service", vec![], transport.clone())
     .with_payment(PaymentConfig {
         backend: backend.clone(),
         required_amount: 100,
@@ -428,7 +428,7 @@ let receiver = WakuA2ANode::new("service", "Paid service", vec![], transport.clo
     });
 
 // Sender: auto-pay 100 tokens on every outgoing task
-let sender = WakuA2ANode::new("client", "Client", vec![], transport.clone())
+let sender = LmaoNode::new("client", "Client", vec![], transport.clone())
     .with_payment(PaymentConfig {
         backend: backend.clone(),
         required_amount: 0,
@@ -466,7 +466,7 @@ polling for the result within a configurable timeout.
 ### API usage
 
 ```rust
-use logos_messaging_a2a::{DelegationRequest, DelegationStrategy, WakuA2ANode};
+use logos_messaging_a2a::{DelegationRequest, DelegationStrategy, LmaoNode};
 
 // Build a delegation request
 let request = DelegationRequest {
@@ -524,11 +524,11 @@ reassembles the full text once the final chunk arrives.
 
 ```rust
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 
 let transport = InMemoryTransport::new();
-let agent = WakuA2ANode::new("agent", "Streaming agent", vec![], transport.clone());
-let listener = WakuA2ANode::new("listener", "Listener", vec![], transport.clone());
+let agent = LmaoNode::new("agent", "Streaming agent", vec![], transport.clone());
+let listener = LmaoNode::new("listener", "Listener", vec![], transport.clone());
 
 // Agent sends a task response as a stream of chunks
 let task = /* received task */;
@@ -564,7 +564,7 @@ use logos_messaging_a2a_transport::InMemoryTransport;
 use std::sync::Arc;
 
 let transport = Arc::new(InMemoryTransport::new());
-// Pass to WakuA2ANode — agents communicate in-process
+// Pass to LmaoNode — agents communicate in-process
 ```
 
 ## MCP Bridge

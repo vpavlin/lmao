@@ -1,4 +1,4 @@
-//! Lightweight observability counters for [`WakuA2ANode`](crate::WakuA2ANode).
+//! Lightweight observability counters for [`LmaoNode`](crate::LmaoNode).
 //!
 //! All counters are [`AtomicU64`] — lock-free, zero-allocation increments.
 //! Call [`Metrics::snapshot`] to get a serializable [`MetricsSnapshot`] of the
@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Atomic counters for node operations.
 ///
-/// Shared across all methods of a [`WakuA2ANode`](crate::WakuA2ANode) via an
+/// Shared across all methods of a [`LmaoNode`](crate::LmaoNode) via an
 /// internal `Arc`-free field (the node itself is typically `Arc`-wrapped by
 /// callers).  Every counter uses [`Ordering::Relaxed`] — sufficient for
 /// monotonic counters that are only read for display / export.

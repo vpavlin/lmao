@@ -1,5 +1,5 @@
 use anyhow::Result;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
 
 use crate::common::IdentityConfig;
@@ -13,7 +13,7 @@ pub async fn handle(
     print_metrics(&node, json)
 }
 
-fn print_metrics(node: &WakuA2ANode<LogosMessagingTransport>, json: bool) -> Result<()> {
+fn print_metrics(node: &LmaoNode<LogosMessagingTransport>, json: bool) -> Result<()> {
     let snap = node.metrics();
 
     if json {

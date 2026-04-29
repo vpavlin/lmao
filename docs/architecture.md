@@ -21,7 +21,7 @@
 │                     Node Layer                                       │
 │                                                                      │
 │  ┌─────────────────────────┴──────────────────────────────┐         │
-│  │                 WakuA2ANode<T>                          │         │
+│  │                 LmaoNode<T>                          │         │
 │  │                                                         │         │
 │  │  • announce()     — broadcast AgentCard                 │         │
 │  │  • discover()     — find agents on network              │         │
@@ -122,7 +122,7 @@ logos-messaging-a2a (workspace root)
 ├── logos-messaging-a2a-execution      On-chain execution (Status Network, LEZ stub)
 │   └── depends on: core
 │
-├── logos-messaging-a2a-node           WakuA2ANode — main orchestrator
+├── logos-messaging-a2a-node           LmaoNode — main orchestrator
 │   └── depends on: core, crypto, transport, storage, execution
 │
 ├── logos-messaging-a2a-cli            CLI binary
@@ -311,7 +311,7 @@ Key design points:
   not ACKed (`Ok((_, false))`) is left to the SDS retransmission loop.
 - Jitter adds a uniform random offset in `[0, base_delay] / 2` to avoid
   thundering-herd problems when many agents retry simultaneously.
-- Enable via `WakuA2ANode::with_retry(RetryConfig { ... })`.
+- Enable via `LmaoNode::with_retry(RetryConfig { ... })`.
 
 Implementation:
 - `logos-messaging-a2a-core::RetryConfig` — configuration type.
@@ -359,7 +359,7 @@ Expired entries are lazily filtered on read and batch-removed via
 
 ### Combined Discovery
 
-`WakuA2ANode::discover_all()` merges two discovery sources and
+`LmaoNode::discover_all()` merges two discovery sources and
 deduplicates by public key:
 
 ```
@@ -451,7 +451,7 @@ interact with the decentralized agent fleet.
 │   MCP Host      │◀─────────▶│   LogosA2ABridge          │◀────────▶│  Agent Fleet  │
 │  (Claude, etc.) │            │                          │           │  (Waku P2P)   │
 │                 │            │  ┌────────────────────┐  │           │               │
-│  discover_agents│───────────▶│  │ WakuA2ANode<T>     │  │           │  Agent A      │
+│  discover_agents│───────────▶│  │ LmaoNode<T>     │  │           │  Agent A      │
 │  send_to_agent  │            │  │  .discover()       │──┼──────────▶│  Agent B      │
 │  list_cached    │            │  │  .send_text()      │  │           │  Agent C      │
 │                 │            │  │  .poll_tasks()     │  │           │               │

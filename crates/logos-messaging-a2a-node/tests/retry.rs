@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use logos_messaging_a2a_core::RetryConfig;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::{Transport, TransportError};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -115,7 +115,7 @@ async fn test_retry_succeeds_after_failures() {
         jitter: false,
     };
 
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         "retry-test",
         "retry test agent",
         vec![],
@@ -151,7 +151,7 @@ async fn test_retry_exhausted() {
         jitter: false,
     };
 
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         "retry-exhaust",
         "retry exhaust agent",
         vec![],
@@ -177,7 +177,7 @@ async fn test_no_retry_without_config() {
     let transport = FailNTransport::new(1); // fail once
 
     // No retry config — should fail immediately
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         "no-retry",
         "no retry agent",
         vec![],
@@ -206,7 +206,7 @@ async fn test_retry_first_attempt_succeeds() {
         jitter: false,
     };
 
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         "instant-ok",
         "instant success agent",
         vec![],
@@ -241,7 +241,7 @@ async fn test_retry_with_jitter() {
         jitter: true, // enable jitter
     };
 
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         "jitter-test",
         "jitter test agent",
         vec![],
@@ -267,11 +267,11 @@ async fn test_retry_with_jitter() {
 async fn test_with_retry_builder() {
     let transport = FailNTransport::new(0);
 
-    let node = WakuA2ANode::new("builder-test", "test", vec![], transport);
+    let node = LmaoNode::new("builder-test", "test", vec![], transport);
     assert!(node.retry_config().is_none());
 
     let transport2 = FailNTransport::new(0);
-    let node2 = WakuA2ANode::new("builder-test2", "test", vec![], transport2)
+    let node2 = LmaoNode::new("builder-test2", "test", vec![], transport2)
         .with_retry(RetryConfig::default());
     assert!(node2.retry_config().is_some());
     assert_eq!(node2.retry_config().unwrap().max_attempts, 5);

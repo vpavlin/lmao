@@ -1,6 +1,6 @@
 //! Integration test: presence announcements and PeerMap discovery.
 
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 
 #[tokio::test]
@@ -8,13 +8,13 @@ async fn test_presence_announce_and_discover() {
     let transport = InMemoryTransport::new();
 
     // Two agents on the same transport
-    let alice = WakuA2ANode::new(
+    let alice = LmaoNode::new(
         "alice",
         "Alice agent",
         vec!["summarize".into(), "text".into()],
         transport.clone(),
     );
-    let bob = WakuA2ANode::new(
+    let bob = LmaoNode::new(
         "bob",
         "Bob agent",
         vec!["translate".into(), "text".into()],
@@ -48,26 +48,26 @@ async fn test_presence_announce_and_discover() {
 async fn test_find_peers_by_capability() {
     let transport = InMemoryTransport::new();
 
-    let summarizer = WakuA2ANode::new(
+    let summarizer = LmaoNode::new(
         "summarizer",
         "Summarizer",
         vec!["summarize".into()],
         transport.clone(),
     );
-    let translator = WakuA2ANode::new(
+    let translator = LmaoNode::new(
         "translator",
         "Translator",
         vec!["translate".into()],
         transport.clone(),
     );
-    let polyglot = WakuA2ANode::new(
+    let polyglot = LmaoNode::new(
         "polyglot",
         "Polyglot",
         vec!["summarize".into(), "translate".into()],
         transport.clone(),
     );
 
-    let observer = WakuA2ANode::new("observer", "Observer", vec![], transport.clone());
+    let observer = LmaoNode::new("observer", "Observer", vec![], transport.clone());
     observer.poll_presence().await.unwrap();
 
     // All announce
@@ -93,7 +93,7 @@ async fn test_find_peers_by_capability() {
 #[tokio::test]
 async fn test_self_announcements_ignored() {
     let transport = InMemoryTransport::new();
-    let node = WakuA2ANode::new("solo", "Solo agent", vec!["text".into()], transport);
+    let node = LmaoNode::new("solo", "Solo agent", vec!["text".into()], transport);
 
     node.poll_presence().await.unwrap();
     node.announce_presence().await.unwrap();

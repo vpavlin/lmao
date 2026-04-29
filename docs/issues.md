@@ -84,7 +84,7 @@ The current "minimal-SDS" provides:
 - `IntroBundle` for out-of-band key exchange
 - `A2AEnvelope::EncryptedTask` variant for encrypted task payloads
 - `AgentCard.intro_bundle` field for advertising encryption support
-- `WakuA2ANode::new_encrypted()` constructor
+- `LmaoNode::new_encrypted()` constructor
 - CLI `--encrypt` flag and `agent bundle` command
 - Backward compatible: plaintext mode still works
 
@@ -132,7 +132,7 @@ Logos Core uses a plugin architecture where `.so` modules implement `IComponent`
 
 **Tasks:**
 - [ ] Define `IComponent` interface for logos-messaging-a2a
-- [ ] Expose `WakuA2ANode` lifecycle via C FFI
+- [ ] Expose `LmaoNode` lifecycle via C FFI
 - [ ] Create QML UI for agent management
 - [ ] Integration tests with Logos Core runtime
 
@@ -151,7 +151,7 @@ MCP is the standard for connecting AI models to external tools. An MCP bridge wo
 - Any MCP-compatible AI client
 
 **Approach:**
-- MCP server that wraps `WakuA2ANode`
+- MCP server that wraps `LmaoNode`
 - Each discovered agent becomes an MCP tool
 - Tool calls translate to A2A tasks
 - Responses stream back via MCP

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use logos_messaging_a2a_core::registry::{AgentRegistry, InMemoryRegistry};
 use logos_messaging_a2a_core::{AgentCard, Task, TaskState};
 use logos_messaging_a2a_execution::{AgentId, ExecutionBackend, TransferDetails, TxHash};
-use logos_messaging_a2a_node::{PaymentConfig, WakuA2ANode};
+use logos_messaging_a2a_node::{PaymentConfig, LmaoNode};
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -77,7 +77,7 @@ async fn full_lifecycle_discovery_encrypted_task_payment() {
 
     // Service agent: requires 50 tokens per task
     let service = Arc::new(
-        WakuA2ANode::new_encrypted(
+        LmaoNode::new_encrypted(
             "translator",
             "Translator Service",
             vec!["translate".into(), "text".into()],
@@ -96,7 +96,7 @@ async fn full_lifecycle_discovery_encrypted_task_payment() {
 
     // Client agent: auto-pays 50 tokens per task
     let client = Arc::new(
-        WakuA2ANode::new_encrypted(
+        LmaoNode::new_encrypted(
             "client",
             "Client Agent",
             vec!["text".into()],
@@ -182,12 +182,12 @@ async fn discover_all_deduplicates_presence_and_registry() {
     let transport = InMemoryTransport::new();
     let registry = Arc::new(InMemoryRegistry::new());
 
-    let agent_a = WakuA2ANode::new("aa", "Agent A", vec!["text".into()], transport.clone())
+    let agent_a = LmaoNode::new("aa", "Agent A", vec!["text".into()], transport.clone())
         .with_registry(registry.clone());
-    let agent_b = WakuA2ANode::new("bb", "Agent B", vec!["text".into()], transport.clone())
+    let agent_b = LmaoNode::new("bb", "Agent B", vec!["text".into()], transport.clone())
         .with_registry(registry.clone());
     let observer =
-        WakuA2ANode::new("obs", "Observer", vec![], transport).with_registry(registry.clone());
+        LmaoNode::new("obs", "Observer", vec![], transport).with_registry(registry.clone());
 
     // agent_a in both registry AND presence
     agent_a.register_in_registry().await.unwrap();
@@ -213,7 +213,7 @@ async fn five_agent_concurrent_discovery() {
 
     let mut nodes = Vec::new();
     for i in 0..5 {
-        let node = WakuA2ANode::new(
+        let node = LmaoNode::new(
             &format!("agent-{}", i),
             &format!("Agent {}", i),
             vec![format!("cap-{}", i)],
@@ -229,7 +229,7 @@ async fn five_agent_concurrent_discovery() {
     }
 
     let observer =
-        WakuA2ANode::new("observer", "Observer", vec![], transport).with_registry(registry.clone());
+        LmaoNode::new("observer", "Observer", vec![], transport).with_registry(registry.clone());
     observer.poll_presence().await.unwrap();
     let all = observer.discover_all().await.unwrap();
 

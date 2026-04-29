@@ -6,7 +6,7 @@
 
 use logos_messaging_a2a_core::{Task, TaskState};
 use logos_messaging_a2a_crypto::AgentIdentity;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use logos_messaging_a2a_transport::Transport;
 use std::sync::Arc;
@@ -19,13 +19,13 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_x25519_key_exchange_and_session_establishment() {
     let transport = InMemoryTransport::new();
-    let alice = WakuA2ANode::new_encrypted(
+    let alice = LmaoNode::new_encrypted(
         "alice",
         "Alice agent",
         vec!["text".into()],
         transport.clone(),
     );
-    let bob = WakuA2ANode::new_encrypted("bob", "Bob agent", vec!["text".into()], transport);
+    let bob = LmaoNode::new_encrypted("bob", "Bob agent", vec!["text".into()], transport);
 
     // Both nodes should have X25519 identities
     let alice_identity = alice.identity().expect("alice should have identity");
@@ -82,13 +82,13 @@ async fn test_x25519_key_exchange_and_session_establishment() {
 async fn test_three_agent_encrypted_roundtrips() {
     // Pair 1: Alice → Bob encrypted roundtrip
     let transport_ab = InMemoryTransport::new();
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport_ab.clone(),
     ));
-    let bob_ab = Arc::new(WakuA2ANode::new_encrypted(
+    let bob_ab = Arc::new(LmaoNode::new_encrypted(
         "bob-ab",
         "Bob (A↔B)",
         vec!["relay".into()],
@@ -131,13 +131,13 @@ async fn test_three_agent_encrypted_roundtrips() {
 
     // Pair 2: Bob → Carol encrypted roundtrip
     let transport_bc = InMemoryTransport::new();
-    let bob_bc = Arc::new(WakuA2ANode::new_encrypted(
+    let bob_bc = Arc::new(LmaoNode::new_encrypted(
         "bob-bc",
         "Bob (B↔C)",
         vec!["relay".into()],
         transport_bc.clone(),
     ));
-    let carol = Arc::new(WakuA2ANode::new_encrypted(
+    let carol = Arc::new(LmaoNode::new_encrypted(
         "carol",
         "Carol",
         vec!["text".into()],
@@ -184,13 +184,13 @@ async fn test_three_agent_encrypted_roundtrips() {
 
     // Pair 3: Carol → Alice encrypted roundtrip (closes the triangle)
     let transport_ca = InMemoryTransport::new();
-    let carol2 = Arc::new(WakuA2ANode::new_encrypted(
+    let carol2 = Arc::new(LmaoNode::new_encrypted(
         "carol-ca",
         "Carol (C↔A)",
         vec!["text".into()],
         transport_ca.clone(),
     ));
-    let alice2 = Arc::new(WakuA2ANode::new_encrypted(
+    let alice2 = Arc::new(LmaoNode::new_encrypted(
         "alice-ca",
         "Alice (C↔A)",
         vec!["text".into()],
@@ -239,13 +239,13 @@ async fn test_three_agent_encrypted_roundtrips() {
 async fn test_encrypted_streaming_response() {
     let transport = InMemoryTransport::new();
 
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new_encrypted(
+    let bob = Arc::new(LmaoNode::new_encrypted(
         "bob",
         "Bob",
         vec!["text".into()],
@@ -305,13 +305,13 @@ async fn test_encrypted_streaming_response() {
 async fn test_session_persistence_across_messages() {
     let transport = InMemoryTransport::new();
 
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new_encrypted(
+    let bob = Arc::new(LmaoNode::new_encrypted(
         "bob",
         "Bob",
         vec!["text".into()],
@@ -414,7 +414,7 @@ async fn test_encrypted_agent_ignores_encrypted_from_unknown_peer() {
     let transport = InMemoryTransport::new();
 
     // Bob has encryption enabled
-    let bob = Arc::new(WakuA2ANode::new_encrypted(
+    let bob = Arc::new(LmaoNode::new_encrypted(
         "bob",
         "Bob",
         vec!["text".into()],
@@ -422,7 +422,7 @@ async fn test_encrypted_agent_ignores_encrypted_from_unknown_peer() {
     ));
 
     // Eve is a separate encrypted node whose card Bob never receives
-    let eve = Arc::new(WakuA2ANode::new_encrypted(
+    let eve = Arc::new(LmaoNode::new_encrypted(
         "eve",
         "Eve",
         vec!["text".into()],
@@ -430,7 +430,7 @@ async fn test_encrypted_agent_ignores_encrypted_from_unknown_peer() {
     ));
 
     // Alice has no encryption
-    let alice = Arc::new(WakuA2ANode::new(
+    let alice = Arc::new(LmaoNode::new(
         "alice",
         "Alice (plaintext)",
         vec!["text".into()],
@@ -489,13 +489,13 @@ async fn test_unencrypted_node_cannot_decrypt_encrypted_task() {
     let transport = InMemoryTransport::new();
 
     // Alice has encryption, Bob does NOT
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new(
+    let bob = Arc::new(LmaoNode::new(
         "bob",
         "Bob (no crypto)",
         vec!["text".into()],
@@ -546,13 +546,13 @@ async fn test_unencrypted_node_cannot_decrypt_encrypted_task() {
 async fn test_large_payload_encrypted_roundtrip() {
     let transport = InMemoryTransport::new();
 
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new_encrypted(
+    let bob = Arc::new(LmaoNode::new_encrypted(
         "bob",
         "Bob",
         vec!["text".into()],

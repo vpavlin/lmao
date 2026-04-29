@@ -1,24 +1,24 @@
 //! Integration tests: full agent-to-agent task lifecycle using InMemoryTransport.
 
 use logos_messaging_a2a_core::{Task, TaskState};
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Helper: create a node pair sharing one transport.
 fn make_arc_pair() -> (
-    Arc<WakuA2ANode<InMemoryTransport>>,
-    Arc<WakuA2ANode<InMemoryTransport>>,
+    Arc<LmaoNode<InMemoryTransport>>,
+    Arc<LmaoNode<InMemoryTransport>>,
 ) {
     let transport = InMemoryTransport::new();
-    let alice = Arc::new(WakuA2ANode::new(
+    let alice = Arc::new(LmaoNode::new(
         "alice",
         "Alice agent",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new(
+    let bob = Arc::new(LmaoNode::new(
         "bob",
         "Bob agent",
         vec!["text".into()],
@@ -128,13 +128,13 @@ async fn test_multiple_tasks() {
 #[tokio::test]
 async fn test_discover_agents() {
     let transport = InMemoryTransport::new();
-    let alice = WakuA2ANode::new(
+    let alice = LmaoNode::new(
         "alice",
         "Alice agent",
         vec!["text".into()],
         transport.clone(),
     );
-    let bob = WakuA2ANode::new("bob", "Bob agent", vec!["code".into()], transport);
+    let bob = LmaoNode::new("bob", "Bob agent", vec!["code".into()], transport);
 
     alice.announce().await.unwrap();
     bob.announce().await.unwrap();
@@ -149,13 +149,13 @@ async fn test_discover_agents() {
 #[tokio::test]
 async fn test_encrypted_task_roundtrip() {
     let transport = InMemoryTransport::new();
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec!["text".into()],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new_encrypted(
+    let bob = Arc::new(LmaoNode::new_encrypted(
         "bob",
         "Bob",
         vec!["text".into()],
@@ -210,13 +210,13 @@ async fn test_encrypted_task_roundtrip() {
 #[tokio::test]
 async fn test_unencrypted_node_receives_plaintext_only() {
     let transport = InMemoryTransport::new();
-    let alice = Arc::new(WakuA2ANode::new_encrypted(
+    let alice = Arc::new(LmaoNode::new_encrypted(
         "alice",
         "Alice",
         vec![],
         transport.clone(),
     ));
-    let bob = Arc::new(WakuA2ANode::new(
+    let bob = Arc::new(LmaoNode::new(
         "bob",
         "Bob (no encryption)",
         vec![],
