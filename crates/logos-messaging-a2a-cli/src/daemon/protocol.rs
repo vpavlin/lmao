@@ -140,7 +140,10 @@ pub fn default_socket_path() -> PathBuf {
         return PathBuf::from(d).join("lmao").join("lmao.sock");
     }
     if let Ok(h) = std::env::var("HOME") {
-        return PathBuf::from(h).join(".cache").join("lmao").join("lmao.sock");
+        return PathBuf::from(h)
+            .join(".cache")
+            .join("lmao")
+            .join("lmao.sock");
     }
     PathBuf::from("/tmp/lmao.sock")
 }
@@ -178,7 +181,10 @@ mod tests {
         unsafe {
             std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         }
-        assert_eq!(default_socket_path(), PathBuf::from("/run/user/1000/lmao.sock"));
+        assert_eq!(
+            default_socket_path(),
+            PathBuf::from("/run/user/1000/lmao.sock")
+        );
         unsafe {
             match prev {
                 Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),

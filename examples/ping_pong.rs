@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use logos_messaging_a2a::{
-    A2AEnvelope, AgentIdentity, InMemoryTransport, Task, Transport, LmaoNode,
+    A2AEnvelope, AgentIdentity, InMemoryTransport, LmaoNode, Task, Transport,
 };
 
 #[tokio::main]

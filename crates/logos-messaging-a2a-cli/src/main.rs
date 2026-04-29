@@ -129,9 +129,8 @@ pub(crate) async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
             // Quieter by default for CLI users — the libp2p / nim-waku INFO
             // stream is great for debugging and noisy on stdout. Override
             // with LMAO_NODE_LOG_LEVEL when triaging connection issues.
-            config.log_level = Some(
-                std::env::var("LMAO_NODE_LOG_LEVEL").unwrap_or_else(|_| "WARN".to_string()),
-            );
+            config.log_level =
+                Some(std::env::var("LMAO_NODE_LOG_LEVEL").unwrap_or_else(|_| "WARN".to_string()));
             let t = LogosDeliveryTransport::new(config).await?;
             Ok(Arc::new(t))
         }

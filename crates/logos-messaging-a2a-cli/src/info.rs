@@ -62,7 +62,14 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
         println!("Task topic:      {task_topic}");
         println!("Discovery topic: {}", topics::DISCOVERY);
         println!("Presence topic:  {}", topics::PRESENCE);
-        println!("Storage:         {}", if storage_enabled { "enabled" } else { "disabled" });
+        println!(
+            "Storage:         {}",
+            if storage_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
         println!("Uptime:          {uptime_secs}s");
     }
     Ok(())

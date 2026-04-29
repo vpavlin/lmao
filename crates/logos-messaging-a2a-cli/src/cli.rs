@@ -615,7 +615,10 @@ mod tests {
         let cli = try_parse(&["cli", "agent", "run", "--name", "echo"]).unwrap();
         match cli.command {
             Commands::Agent {
-                action: AgentAction::Run { name, capabilities, .. },
+                action:
+                    AgentAction::Run {
+                        name, capabilities, ..
+                    },
             } => {
                 assert_eq!(name, "echo");
                 assert_eq!(capabilities, "text");

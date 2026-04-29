@@ -19,7 +19,9 @@ pub async fn handle(
     json: bool,
 ) -> Result<()> {
     match action {
-        StorageAction::Fetch { cid, output } => fetch(&cid, output.as_deref(), daemon_socket, json).await,
+        StorageAction::Fetch { cid, output } => {
+            fetch(&cid, output.as_deref(), daemon_socket, json).await
+        }
     }
 }
 
@@ -29,9 +31,7 @@ async fn fetch(
     daemon_socket: Option<&PathBuf>,
     json: bool,
 ) -> Result<()> {
-    let socket = daemon_socket
-        .cloned()
-        .unwrap_or_else(default_socket_path);
+    let socket = daemon_socket.cloned().unwrap_or_else(default_socket_path);
     let client = DaemonClient::new(&socket);
     if !client.probe().await {
         return Err(anyhow!(
@@ -47,7 +47,11 @@ async fn fetch(
             cid: cid.to_string(),
         })
         .await?;
-    let Response::StorageFetch { cid: _, payload_b64 } = resp else {
+    let Response::StorageFetch {
+        cid: _,
+        payload_b64,
+    } = resp
+    else {
         return Err(anyhow!("unexpected daemon response: {resp:?}"));
     };
     let bytes = base64::engine::general_purpose::STANDARD
@@ -55,8 +59,7 @@ async fn fetch(
         .context("decoding daemon's base64 payload")?;
 
     if let Some(path) = output {
-        std::fs::write(path, &bytes)
-            .with_context(|| format!("writing to {}", path.display()))?;
+        std::fs::write(path, &bytes).with_context(|| format!("writing to {}", path.display()))?;
         if json {
             println!(
                 "{}",

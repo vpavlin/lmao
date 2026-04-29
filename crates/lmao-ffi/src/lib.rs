@@ -475,9 +475,9 @@ mod tests {
 
     #[test]
     fn test_success_json_float_value() {
-        let v = unsafe { read_json_and_free(success_json(serde_json::json!(3.14))) };
+        let v = unsafe { read_json_and_free(success_json(serde_json::json!(42.5))) };
         assert_eq!(v["success"], true);
-        assert!((v["data"].as_f64().unwrap() - 3.14).abs() < f64::EPSILON);
+        assert!((v["data"].as_f64().unwrap() - 42.5).abs() < f64::EPSILON);
     }
 
     // ── lmao_free_string tests ─────────────────────────────────────────────

@@ -13,9 +13,7 @@ pub async fn handle(
     daemon_socket: Option<&PathBuf>,
     json: bool,
 ) -> Result<()> {
-    let socket = daemon_socket
-        .cloned()
-        .unwrap_or_else(default_socket_path);
+    let socket = daemon_socket.cloned().unwrap_or_else(default_socket_path);
     let client = DaemonClient::new(&socket);
 
     match action {
@@ -66,7 +64,14 @@ pub async fn handle(
                 println!("Public key:    {pubkey}");
                 println!("Capabilities:  {}", capabilities.join(", "));
                 println!("Uptime:        {uptime_secs}s");
-                println!("Storage:       {}", if storage_enabled { "enabled" } else { "disabled" });
+                println!(
+                    "Storage:       {}",
+                    if storage_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
             }
             Ok(())
         }
@@ -82,7 +87,10 @@ pub async fn handle(
                         }))?
                     );
                 } else {
-                    eprintln!("No daemon listening at {} — nothing to stop.", socket.display());
+                    eprintln!(
+                        "No daemon listening at {} — nothing to stop.",
+                        socket.display()
+                    );
                 }
                 // Not an error per se; just a no-op.
                 return Ok(());

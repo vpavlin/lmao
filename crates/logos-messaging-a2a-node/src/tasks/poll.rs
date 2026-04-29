@@ -3,7 +3,7 @@ use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
 use crate::session::Session;
-use crate::{NodeError, Result, LmaoNode};
+use crate::{LmaoNode, NodeError, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Poll for incoming tasks addressed to this agent.
@@ -321,8 +321,7 @@ mod tests {
     #[tokio::test]
     async fn test_encrypted_node_decrypt_with_wrong_sender_pubkey_ignored() {
         let transport = MockTransport::new();
-        let receiver =
-            LmaoNode::new_encrypted("receiver", "receiver", vec![], transport.clone());
+        let receiver = LmaoNode::new_encrypted("receiver", "receiver", vec![], transport.clone());
         let topic = topics::task_topic(receiver.pubkey());
         let _ = receiver.poll_tasks().await.unwrap();
 

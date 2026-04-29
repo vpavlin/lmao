@@ -44,9 +44,9 @@ pub mod logos_core_transport;
 pub use logos_core_transport::LogosCoreDeliveryTransport;
 
 #[cfg(feature = "logos-delivery")]
-mod logos_delivery_sys;
-#[cfg(feature = "logos-delivery")]
 pub mod logos_delivery;
+#[cfg(feature = "logos-delivery")]
+mod logos_delivery_sys;
 #[cfg(feature = "logos-delivery")]
 pub use logos_delivery::LogosDeliveryTransport;
 

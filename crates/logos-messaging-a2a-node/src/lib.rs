@@ -690,8 +690,7 @@ mod keyfile_tests {
         let expected_pubkey = hex::encode(key.verifying_key().to_encoded_point(true).as_bytes());
         std::fs::write(&path, &hex_str).unwrap();
 
-        let node =
-            LmaoNode::from_keyfile("test", "test", vec![], make_transport(), &path).unwrap();
+        let node = LmaoNode::from_keyfile("test", "test", vec![], make_transport(), &path).unwrap();
 
         assert_eq!(node.pubkey(), expected_pubkey);
     }

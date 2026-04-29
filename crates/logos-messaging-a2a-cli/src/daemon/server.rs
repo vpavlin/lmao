@@ -183,7 +183,8 @@ impl DaemonServer {
                 broadcast,
                 strategy,
             } => {
-                let strategy = build_strategy(to.as_deref(), capability.as_deref(), strategy.as_deref());
+                let strategy =
+                    build_strategy(to.as_deref(), capability.as_deref(), strategy.as_deref());
                 let request = DelegationRequest {
                     parent_task_id: parent_id,
                     subtask_text: text,

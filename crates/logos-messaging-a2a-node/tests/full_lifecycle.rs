@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use logos_messaging_a2a_core::registry::{AgentRegistry, InMemoryRegistry};
 use logos_messaging_a2a_core::{AgentCard, Task, TaskState};
 use logos_messaging_a2a_execution::{AgentId, ExecutionBackend, TransferDetails, TxHash};
-use logos_messaging_a2a_node::{PaymentConfig, LmaoNode};
+use logos_messaging_a2a_node::{LmaoNode, PaymentConfig};
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::metrics::Metrics;
 use crate::presence;
-use crate::{NodeError, Result, LmaoNode};
+use crate::{LmaoNode, NodeError, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Broadcast this agent's card on the discovery topic.
@@ -241,8 +241,8 @@ mod registry_tests {
     async fn with_registry_builder() {
         let transport = InMemoryTransport::new();
         let registry = Arc::new(InMemoryRegistry::new());
-        let node = LmaoNode::new("test", "test agent", vec![], transport)
-            .with_registry(registry.clone());
+        let node =
+            LmaoNode::new("test", "test agent", vec![], transport).with_registry(registry.clone());
         assert!(node.registry.is_some());
     }
 
@@ -308,8 +308,7 @@ mod registry_tests {
         };
         registry.register(reg_card).await.unwrap();
 
-        let node =
-            LmaoNode::new("discoverer", "disc", vec![], transport).with_registry(registry);
+        let node = LmaoNode::new("discoverer", "disc", vec![], transport).with_registry(registry);
 
         let all = node.discover_all().await.unwrap();
         // Should find the registry agent

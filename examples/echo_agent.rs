@@ -8,7 +8,7 @@
 //!   cargo run --example echo_agent -- --encrypt
 
 use anyhow::Result;
-use logos_messaging_a2a::{LogosMessagingTransport, LmaoNode};
+use logos_messaging_a2a::{LmaoNode, LogosMessagingTransport};
 
 #[tokio::main]
 async fn main() -> Result<()> {

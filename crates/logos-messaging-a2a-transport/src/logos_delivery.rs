@@ -92,12 +92,7 @@ impl Future for CallFuture {
     }
 }
 
-extern "C" fn call_trampoline(
-    ret: c_int,
-    msg: *const c_char,
-    len: usize,
-    user_data: *mut c_void,
-) {
+extern "C" fn call_trampoline(ret: c_int, msg: *const c_char, len: usize, user_data: *mut c_void) {
     if user_data.is_null() {
         return;
     }
@@ -161,12 +156,7 @@ struct InboundEvent {
     message: Option<ReceivedMessage>,
 }
 
-extern "C" fn event_trampoline(
-    ret: c_int,
-    msg: *const c_char,
-    len: usize,
-    user_data: *mut c_void,
-) {
+extern "C" fn event_trampoline(ret: c_int, msg: *const c_char, len: usize, user_data: *mut c_void) {
     if ret != RET_OK || msg.is_null() || len == 0 || user_data.is_null() {
         return;
     }
@@ -186,7 +176,9 @@ extern "C" fn event_trampoline(
     if event.event_type != "message_received" {
         return;
     }
-    let Some(received) = event.message else { return };
+    let Some(received) = event.message else {
+        return;
+    };
     if let Ok(senders) = state.senders.lock() {
         if let Some(tx) = senders.get(&received.content_topic) {
             let _ = tx.try_send(received.payload);

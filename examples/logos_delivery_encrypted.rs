@@ -33,7 +33,12 @@ async fn main() -> Result<()> {
 
     let t_a = Arc::new(make_transport(60050, 9050).await?) as Arc<dyn Transport>;
     let t_b = Arc::new(make_transport(60051, 9051).await?) as Arc<dyn Transport>;
-    let alice = LmaoNode::new_encrypted("alice", "encrypted requester", vec!["text".into()], t_a.clone());
+    let alice = LmaoNode::new_encrypted(
+        "alice",
+        "encrypted requester",
+        vec!["text".into()],
+        t_a.clone(),
+    );
     let bob = LmaoNode::new_encrypted("bob", "encrypted echo", vec!["text".into()], t_b.clone());
     eprintln!(
         "  alice X25519 bundle: {}…",
@@ -122,7 +127,8 @@ async fn main() -> Result<()> {
         .into_iter()
         .find(|c| c.public_key == alice.pubkey());
     if let Some(ref card) = alice_card {
-        bob.respond_to(bob_task, "Acknowledged.", Some(card)).await?;
+        bob.respond_to(bob_task, "Acknowledged.", Some(card))
+            .await?;
     } else {
         // Fallback: plaintext respond. Less interesting; flag it loudly.
         eprintln!("  (warn) bob did not see alice's card; responding plaintext");

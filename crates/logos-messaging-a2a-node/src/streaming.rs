@@ -4,7 +4,7 @@ use logos_messaging_a2a_core::{topics, A2AEnvelope, Task, TaskStreamChunk};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{Result, LmaoNode};
+use crate::{LmaoNode, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Publish a sequence of stream chunks for a task.

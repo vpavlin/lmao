@@ -9,7 +9,7 @@ pub use logos_messaging_a2a_crypto::{AgentIdentity, EncryptedPayload, IntroBundl
 pub use logos_messaging_a2a_execution::{
     AgentId, ExecutionBackend, ExecutionError, TransferDetails, TxHash,
 };
-pub use logos_messaging_a2a_node::{PaymentConfig, LmaoNode};
+pub use logos_messaging_a2a_node::{LmaoNode, PaymentConfig};
 pub use logos_messaging_a2a_storage::{
     maybe_offload, LogosStorageRest, StorageBackend, StorageError, DEFAULT_OFFLOAD_THRESHOLD,
 };

@@ -29,7 +29,12 @@ async fn main() -> Result<()> {
 
     let transport_a = Arc::new(make_transport(60030, 9030).await?) as Arc<dyn Transport>;
     let transport_b = Arc::new(make_transport(60031, 9031).await?) as Arc<dyn Transport>;
-    let alice = LmaoNode::new("alice", "listener", vec!["text".into()], transport_a.clone());
+    let alice = LmaoNode::new(
+        "alice",
+        "listener",
+        vec!["text".into()],
+        transport_a.clone(),
+    );
     let bob = LmaoNode::new(
         "bob",
         "streamer",

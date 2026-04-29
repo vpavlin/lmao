@@ -8,7 +8,7 @@
 //!   cargo run --example presence_discovery
 
 use anyhow::Result;
-use logos_messaging_a2a::{A2AEnvelope, InMemoryTransport, Task, Transport, LmaoNode};
+use logos_messaging_a2a::{A2AEnvelope, InMemoryTransport, LmaoNode, Task, Transport};
 
 #[tokio::main]
 async fn main() -> Result<()> {

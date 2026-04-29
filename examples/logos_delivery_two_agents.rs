@@ -70,7 +70,12 @@ async fn main() -> Result<()> {
 
     eprintln!("\nStep 4: alice drains the discovery topic…");
     let cards = poll_until(
-        || async { alice.discover().await.map(|cards| (cards.len() >= 1, cards)) },
+        || async {
+            alice
+                .discover()
+                .await
+                .map(|cards| (!cards.is_empty(), cards))
+        },
         TASK_DELIVERY_TIMEOUT,
         "alice did not discover bob in time",
     )
@@ -113,7 +118,11 @@ async fn main() -> Result<()> {
         .find(|t| t.id == task.id)
         .ok_or_else(|| anyhow!("bob received tasks but not the one alice sent"))?;
     let body = received_task.text().unwrap_or("(no text)");
-    eprintln!("  bob received task {}: \"{}\"", &received_task.id[..8], body);
+    eprintln!(
+        "  bob received task {}: \"{}\"",
+        &received_task.id[..8],
+        body
+    );
     let response = format!("Echo: {}", body);
     bob.respond(received_task, &response).await?;
     eprintln!("  bob responded: \"{}\"", response);

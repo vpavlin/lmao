@@ -2,7 +2,7 @@ use logos_messaging_a2a_core::Task;
 use logos_messaging_a2a_execution::AgentId;
 use logos_messaging_a2a_transport::Transport;
 
-use crate::{Result, LmaoNode};
+use crate::{LmaoNode, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// If auto-pay is enabled, call `backend.pay()` and attach proof to the task.
@@ -722,15 +722,14 @@ mod tests {
     fn test_with_payment_builder() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node =
-            LmaoNode::new("test", "test", vec![], transport).with_payment(PaymentConfig {
-                backend,
-                required_amount: 42,
-                auto_pay: true,
-                auto_pay_amount: 10,
-                verify_on_chain: true,
-                receiving_account: "0xabc".to_string(),
-            });
+        let node = LmaoNode::new("test", "test", vec![], transport).with_payment(PaymentConfig {
+            backend,
+            required_amount: 42,
+            auto_pay: true,
+            auto_pay_amount: 10,
+            verify_on_chain: true,
+            receiving_account: "0xabc".to_string(),
+        });
         assert!(node.payment.is_some());
         let pay = node.payment.as_ref().unwrap();
         assert_eq!(pay.required_amount, 42);

@@ -23,12 +23,8 @@ pub const RET_MISSING_CALLBACK: c_int = 2;
 /// FFI callback signature used by every async-style call and by the event
 /// stream. Invoked from the library's worker thread — keep it fast and
 /// non-blocking.
-pub type FFICallBack = extern "C" fn(
-    caller_ret: c_int,
-    msg: *const c_char,
-    len: usize,
-    user_data: *mut c_void,
-);
+pub type FFICallBack =
+    extern "C" fn(caller_ret: c_int, msg: *const c_char, len: usize, user_data: *mut c_void);
 
 extern "C" {
     /// Create a new node from a JSON config. Returns an opaque context

@@ -2,7 +2,7 @@ use logos_messaging_a2a_core::{topics, AgentCard, Task};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{Result, LmaoNode};
+use crate::{LmaoNode, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Respond to a task: send back a completed task with result.

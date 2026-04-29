@@ -23,5 +23,5 @@ pub mod protocol;
 pub mod server;
 
 pub use client::DaemonClient;
-pub use protocol::{Request, Response, default_socket_path};
+pub use protocol::{default_socket_path, Request, Response};
 pub use server::DaemonServer;

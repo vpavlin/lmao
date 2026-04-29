@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::metrics::Metrics;
-use crate::{NodeError, Result, LmaoNode};
+use crate::{LmaoNode, NodeError, Result};
 
 /// Default timeout for delegation when none is specified (30 seconds).
 const DEFAULT_DELEGATION_TIMEOUT_SECS: u64 = 30;

@@ -16,9 +16,7 @@ async fn try_via_daemon(
     daemon_socket: Option<&PathBuf>,
     json: bool,
 ) -> Result<bool> {
-    let socket = daemon_socket
-        .cloned()
-        .unwrap_or_else(default_socket_path);
+    let socket = daemon_socket.cloned().unwrap_or_else(default_socket_path);
     let client = DaemonClient::new(socket);
     if !client.probe().await {
         return Ok(false);

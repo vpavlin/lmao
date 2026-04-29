@@ -10,8 +10,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use logos_messaging_a2a::{
-    A2AEnvelope, AgentId, ExecutionBackend, ExecutionError, InMemoryTransport, PaymentConfig, Task,
-    TransferDetails, Transport, TxHash, LmaoNode,
+    A2AEnvelope, AgentId, ExecutionBackend, ExecutionError, InMemoryTransport, LmaoNode,
+    PaymentConfig, Task, TransferDetails, Transport, TxHash,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

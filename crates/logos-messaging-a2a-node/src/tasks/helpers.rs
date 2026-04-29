@@ -3,7 +3,7 @@ use logos_messaging_a2a_crypto::AgentIdentity;
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{NodeError, Result, LmaoNode};
+use crate::{LmaoNode, NodeError, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Serialize a task into an envelope, offloading to storage if needed.
@@ -237,8 +237,7 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
 
         // We'll measure the serialized size of a small task
-        let node =
-            LmaoNode::with_config("test", "test", vec![], transport.clone(), fast_config());
+        let node = LmaoNode::with_config("test", "test", vec![], transport.clone(), fast_config());
         let task = Task::new(node.pubkey(), "02aa", "x");
         let envelope = logos_messaging_a2a_core::A2AEnvelope::Task(task.clone());
         let serialized_len = serde_json::to_vec(&envelope).unwrap().len();

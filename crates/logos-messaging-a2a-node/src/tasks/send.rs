@@ -3,7 +3,7 @@ use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
 use crate::retry;
-use crate::{NodeError, Result, LmaoNode};
+use crate::{LmaoNode, NodeError, Result};
 
 impl<T: Transport> LmaoNode<T> {
     /// Send a task to another agent. Uses SDS reliable delivery with
@@ -95,8 +95,7 @@ mod tests {
     async fn test_send_text_creates_and_sends_task() {
         let transport = MockTransport::new();
         let published = transport.published.clone();
-        let node =
-            LmaoNode::with_config("sender", "sender node", vec![], transport, fast_config());
+        let node = LmaoNode::with_config("sender", "sender node", vec![], transport, fast_config());
 
         let task = node.send_text("02deadbeef", "hello world").await.unwrap();
         assert_eq!(task.from, node.pubkey());

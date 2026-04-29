@@ -57,13 +57,19 @@ async fn run_exec(cmd: &str, task_text: &str) -> Result<ExecOutput> {
         return Err(anyhow!(
             "exec exited with {}: {}",
             out.status,
-            log.lines().rev().find(|l| !l.is_empty()).unwrap_or("(no stderr)")
+            log.lines()
+                .rev()
+                .find(|l| !l.is_empty())
+                .unwrap_or("(no stderr)")
         ));
     }
     if response.is_empty() {
         return Err(anyhow!(
             "exec produced empty stdout (stderr last line: {})",
-            log.lines().rev().find(|l| !l.is_empty()).unwrap_or("(no stderr)")
+            log.lines()
+                .rev()
+                .find(|l| !l.is_empty())
+                .unwrap_or("(no stderr)")
         ));
     }
 
@@ -74,10 +80,7 @@ async fn run_exec(cmd: &str, task_text: &str) -> Result<ExecOutput> {
 /// Returns `Some(cid)` on success, `None` if no backend is configured or
 /// the log is empty. Upload errors are logged and swallowed — a failed
 /// upload should never block delivery of the agent's actual response.
-async fn upload_log(
-    storage: &Option<Arc<dyn StorageBackend>>,
-    log: &str,
-) -> Option<String> {
+async fn upload_log(storage: &Option<Arc<dyn StorageBackend>>, log: &str) -> Option<String> {
     let backend = storage.as_ref()?;
     if log.is_empty() {
         return None;

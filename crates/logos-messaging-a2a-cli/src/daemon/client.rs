@@ -45,7 +45,6 @@ impl DaemonClient {
         }
         Ok(response)
     }
-
 }
 
 async fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
