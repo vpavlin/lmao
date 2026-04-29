@@ -186,10 +186,12 @@ pub async fn handle(
             ));
             tokio::spawn(server.serve());
 
-            // Open the inbox subscription before announcing, so we don't
-            // miss tasks sent in the moment between announce and the first
-            // poll loop iteration.
+            // Open the inbox + presence subscriptions before announcing,
+            // so we don't miss tasks (or peer announcements) sent in the
+            // moment between announce and the first poll loop iteration.
+            // Both subscriptions stay open for the lifetime of the agent.
             let _ = node.poll_tasks().await;
+            let _ = node.poll_presence().await;
 
             // Wait briefly for the gossip mesh to form. Announcing into a
             // mesh with zero subscribed peers is silently dropped.
@@ -226,8 +228,11 @@ pub async fn handle(
                 }
             });
 
-            // Inbox loop.
+            // Inbox loop. Also drains presence so the agent's PeerMap
+            // sees other agents' announcements — required for any
+            // capability-routed delegation through this agent's daemon.
             loop {
+                let _ = node.poll_presence().await;
                 match node.poll_tasks().await {
                     Ok(tasks) => {
                         for task in tasks {

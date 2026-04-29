@@ -51,8 +51,12 @@ async fn main() -> Result<()> {
         Commands::Agent { action } => {
             agent::handle(action, transport, storage, daemon_socket, &identity, json).await
         }
-        Commands::Task { action } => task::handle(action, transport, &identity, json).await,
-        Commands::Presence { action } => presence::handle(action, transport, &identity, json).await,
+        Commands::Task { action } => {
+            task::handle(action, transport, daemon_socket.as_ref(), &identity, json).await
+        }
+        Commands::Presence { action } => {
+            presence::handle(action, transport, daemon_socket.as_ref(), &identity, json).await
+        }
         Commands::Session { action } => session::handle(action, transport, &identity, json).await,
         Commands::Health => health::handle(&cli.waku, json).await,
         Commands::Metrics => metrics::handle(transport, &identity, json).await,

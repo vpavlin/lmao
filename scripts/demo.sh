@@ -25,6 +25,8 @@ ALICE_KEYFILE="$DEMO_DIR/alice.key"
 BOB_KEYFILE="$DEMO_DIR/bob.key"
 ALICE_LOG="$DEMO_DIR/alice.log"
 BOB_LOG="$DEMO_DIR/bob.log"
+ALICE_SOCKET="$DEMO_DIR/alice.sock"
+BOB_SOCKET="$DEMO_DIR/bob.sock"
 PIDFILE="$DEMO_DIR/agents.pid"
 
 VERBOSE=0
@@ -75,8 +77,8 @@ else
 fi
 
 run_agent_bg() {
-  local name="$1" caps="$2" tcp="$3" udp="$4" sport="$5" keyfile="$6" logfile="$7" exec_cmd="$8"
-  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp storage:$sport)..."
+  local name="$1" caps="$2" tcp="$3" udp="$4" sport="$5" sock="$6" keyfile="$7" logfile="$8" exec_cmd="$9"
+  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp storage:$sport sock:$sock)..."
   "$BIN" \
     --transport logos-delivery \
     --storage libstorage \
@@ -84,6 +86,7 @@ run_agent_bg() {
     --storage-port "$sport" \
     --keyfile "$keyfile" \
     --tcp-port "$tcp" --udp-port "$udp" \
+    --daemon-socket "$sock" \
     agent run --name "$name" --capabilities "$caps" --exec "$exec_cmd" \
     >"$logfile" 2>&1 &
   echo "$!" >>"$PIDFILE"
@@ -124,9 +127,9 @@ wait_for_pubkey() {
 echo
 echo "═══ LMAO demo on logos.dev ═══"
 echo
-echo "[1/4] starting two agents (persistent identities + embedded storage)…"
-run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
-run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
+echo "[1/4] starting two agents (persistent identities + embedded storage + IPC sockets)…"
+run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_SOCKET" "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
+run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_SOCKET"   "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
 
 echo
 echo "[2/4] waiting for each to connect to logos.dev and announce…"
@@ -140,15 +143,17 @@ echo "  bob   pubkey: ${BOB_PK:0:16}…"
 sleep 12
 
 echo
-echo "[3/4] discovering peers via presence…"
-# Window must comfortably exceed agent re-announce interval (default 15s)
-# AND give this freshly-spawned client time to dial the logos.dev mesh.
-"$BIN" --transport logos-delivery --tcp-port 60012 --udp-port 9012 \
-  presence peers --timeout 25 2>&1 | "${LOG_FILTER[@]}"
+echo "[3/4] discovering peers via presence (through alice's daemon — no new node)…"
+# We talk to alice's already-running node over IPC instead of spinning
+# up a fresh logos-delivery client for every CLI invocation. This
+# collapses 20+ seconds of mesh-join into a sub-millisecond Unix
+# socket round-trip. Demo-friendly.
+"$BIN" --daemon-socket "$ALICE_SOCKET" \
+  presence peers --timeout 5 2>&1 | "${LOG_FILTER[@]}"
 
 echo
-echo "[4/4] delegating a task by capability=code → bob…"
-"$BIN" --transport logos-delivery --tcp-port 60013 --udp-port 9013 \
+echo "[4/4] delegating a task by capability=code → bob (via alice's daemon)…"
+"$BIN" --daemon-socket "$ALICE_SOCKET" \
   task delegate \
     --capability code \
     --text "Review this snippet: fn main() { println!(\"hello\"); }" \

@@ -1,17 +1,160 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use logos_messaging_a2a_core::{DelegationRequest, DelegationStrategy, Task};
 use logos_messaging_a2a_transport::Transport;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::TaskAction;
 use crate::common::{build_node, IdentityConfig};
+use crate::daemon::{default_socket_path, DaemonClient, Request, Response};
+
+/// Try to dispatch the task action via a running daemon. Returns
+/// `Ok(true)` if the daemon handled it, `Ok(false)` if no daemon was
+/// listening (caller should fall back to building its own node).
+async fn try_via_daemon(
+    action: &TaskAction,
+    daemon_socket: Option<&PathBuf>,
+    json: bool,
+) -> Result<bool> {
+    let socket = daemon_socket
+        .cloned()
+        .unwrap_or_else(default_socket_path);
+    let client = DaemonClient::new(socket);
+    if !client.probe().await {
+        return Ok(false);
+    }
+
+    let request = match action {
+        TaskAction::Send { to, text } => Request::TaskSend {
+            to: to.clone(),
+            text: text.clone(),
+        },
+        TaskAction::Status { id } => Request::TaskStatus { id: id.clone() },
+        TaskAction::Delegate {
+            to,
+            capability,
+            text,
+            parent_id,
+            timeout,
+            broadcast,
+            strategy,
+        } => Request::TaskDelegate {
+            to: to.clone(),
+            capability: capability.clone(),
+            text: text.clone(),
+            parent_id: parent_id.clone(),
+            timeout_secs: *timeout,
+            broadcast: *broadcast,
+            strategy: strategy.clone(),
+        },
+        // Streaming isn't on the daemon protocol yet — fall through to
+        // the local poll loop.
+        TaskAction::Stream { .. } => return Ok(false),
+    };
+
+    let resp = client.send(request).await?;
+    print_daemon_response(resp, json)?;
+    Ok(true)
+}
+
+fn print_daemon_response(resp: Response, json: bool) -> Result<()> {
+    match resp {
+        Response::TaskSend {
+            task_id,
+            from,
+            acked,
+        } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "task_id": task_id,
+                        "from": from,
+                        "status": if acked { "acked" } else { "sent" },
+                    }))?
+                );
+            } else {
+                eprintln!("Source: daemon");
+                println!("Task ID: {task_id}");
+                println!("From:    {from}");
+                println!(
+                    "Status:  {}",
+                    if acked {
+                        "ACKed by recipient"
+                    } else {
+                        "Sent (no ACK yet)"
+                    }
+                );
+            }
+            Ok(())
+        }
+        Response::TaskStatus { results } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "results": results,
+                    }))?
+                );
+            } else if results.is_empty() {
+                println!("No matching task in this daemon's inbox yet.");
+            } else {
+                eprintln!("Source: daemon");
+                for t in results {
+                    println!("Task:   {}", t.id);
+                    println!("State:  {}", t.state);
+                    if let Some(text) = t.result_text {
+                        println!("Result: {text}");
+                    }
+                }
+            }
+            Ok(())
+        }
+        Response::TaskDelegate { results } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "results": results,
+                    }))?
+                );
+                return Ok(());
+            }
+            eprintln!("Source: daemon");
+            if results.is_empty() {
+                println!("Delegation produced no results.");
+            }
+            for r in results {
+                let status = if r.success { "OK" } else { "FAIL" };
+                let agent = &r.agent_id[..12.min(r.agent_id.len())];
+                println!("[{status}] agent={agent} subtask={}", r.subtask_id);
+                if let Some(text) = r.result_text {
+                    println!("  Result: {text}");
+                }
+                if let Some(err) = r.error {
+                    println!("  Error:  {err}");
+                }
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(anyhow!("daemon error: {message}")),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
 
 pub async fn handle(
     action: TaskAction,
     transport: Arc<dyn Transport>,
+    daemon_socket: Option<&PathBuf>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
+    if try_via_daemon(&action, daemon_socket, json).await? {
+        return Ok(());
+    }
     match action {
         TaskAction::Send { to, text } => {
             let node = build_node("cli-sender", "CLI client", vec![], transport, identity)?;
