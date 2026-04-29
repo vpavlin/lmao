@@ -515,7 +515,7 @@ dedicated Waku topics. This is useful for long-running tasks (e.g. LLM token
 output) where the caller wants to display progress before the full result is
 ready.
 
-Each task gets its own stream topic: `/waku-a2a/1/stream/{task_id}/proto`.
+Each task gets its own stream topic: `/lmao/1/stream/{task_id}/proto`.
 Chunks carry an incrementing index and the final chunk is flagged with
 `is_final = true`. The receiver polls for chunks, buffers them in order, and
 reassembles the full text once the final chunk arrives.

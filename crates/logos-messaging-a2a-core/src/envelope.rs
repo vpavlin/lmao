@@ -92,7 +92,7 @@ mod tests {
             agent_id: "02abcdef".to_string(),
             name: "echo".to_string(),
             capabilities: vec!["text".to_string()],
-            waku_topic: "/waku-a2a/1/task/02abcdef/proto".to_string(),
+            waku_topic: "/lmao/1/task/02abcdef/proto".to_string(),
             ttl_secs: 300,
             signature: Some(vec![0xab, 0xcd]),
         };

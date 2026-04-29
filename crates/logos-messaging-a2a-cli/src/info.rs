@@ -74,7 +74,7 @@ mod tests {
         assert!(obj["task_topic"]
             .as_str()
             .unwrap()
-            .contains("/waku-a2a/1/task/"));
+            .contains("/lmao/1/task/"));
         assert_eq!(obj["discovery_topic"], topics::DISCOVERY);
         assert_eq!(obj["presence_topic"], topics::PRESENCE);
         assert_eq!(obj["encryption"], false);
