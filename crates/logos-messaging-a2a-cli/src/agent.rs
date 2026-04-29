@@ -1,9 +1,26 @@
 use anyhow::Result;
 use logos_messaging_a2a_transport::Transport;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::cli::AgentAction;
 use crate::common::{build_node, parse_capabilities, IdentityConfig};
+
+/// Presence announcements are valid for this long; the agent re-announces
+/// well before TTL so a peer that joins the mesh during the window still
+/// sees us. Override with `LMAO_PRESENCE_TTL_SECS` (the matching re-announce
+/// interval is `LMAO_PRESENCE_REANNOUNCE_SECS`).
+const PRESENCE_TTL_SECS_DEFAULT: u64 = 300;
+/// How often `agent run` re-announces presence. Short enough that a
+/// freshly-started peer waiting on the presence topic catches us inside
+/// a normal demo window, long enough that we don't flood the network.
+const PRESENCE_REANNOUNCE_SECS_DEFAULT: u64 = 15;
+/// How long the inbox poll loop sleeps between drains.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Initial wait for gossip mesh to form before announcing. Without this,
+/// the first announce is published before any peer is subscribed and is
+/// effectively dropped on the floor.
+const STARTUP_GOSSIP_WAIT: Duration = Duration::from_secs(3);
 
 pub async fn handle(
     action: AgentAction,
@@ -14,13 +31,20 @@ pub async fn handle(
     match action {
         AgentAction::Run { name, capabilities } => {
             let caps = parse_capabilities(&capabilities);
-            let node = build_node(&name, &format!("{} agent", name), caps, transport, identity)?;
+            let node = Arc::new(build_node(
+                &name,
+                &format!("{} agent", name),
+                caps,
+                transport,
+                identity,
+            )?);
 
             if json {
                 let mut info = serde_json::json!({
                     "event": "agent_started",
                     "name": node.card.name,
                     "pubkey": node.pubkey(),
+                    "capabilities": node.card.capabilities,
                 });
                 if identity.encrypt {
                     if let Some(ref bundle) = node.card.intro_bundle {
@@ -40,6 +64,7 @@ pub async fn handle(
                 }
                 println!("Agent: {}", node.card.name);
                 println!("Pubkey: {}", node.pubkey());
+                println!("Capabilities: {}", node.card.capabilities.join(", "));
                 if identity.encrypt {
                     if let Some(ref bundle) = node.card.intro_bundle {
                         println!("Encryption: ENABLED (X25519+ChaCha20-Poly1305)");
@@ -49,12 +74,47 @@ pub async fn handle(
                 println!("Listening for tasks...\n");
             }
 
-            // Announce on startup
+            // Open the inbox subscription before announcing, so we don't
+            // miss tasks sent in the moment between announce and the first
+            // poll loop iteration.
+            let _ = node.poll_tasks().await;
+
+            // Wait briefly for the gossip mesh to form. Announcing into a
+            // mesh with zero subscribed peers is silently dropped.
+            tokio::time::sleep(STARTUP_GOSSIP_WAIT).await;
+
+            let ttl_secs: u64 = std::env::var("LMAO_PRESENCE_TTL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(PRESENCE_TTL_SECS_DEFAULT);
+            let reannounce_secs: u64 = std::env::var("LMAO_PRESENCE_REANNOUNCE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(PRESENCE_REANNOUNCE_SECS_DEFAULT);
+
             if let Err(e) = node.announce().await {
-                eprintln!("Warning: announce failed (is nwaku running?): {}", e);
+                eprintln!("Warning: discovery announce failed: {}", e);
+            }
+            if let Err(e) = node.announce_presence_with_ttl(ttl_secs).await {
+                eprintln!("Warning: presence announce failed: {}", e);
             }
 
-            // Poll loop
+            // Background re-announce so peers that join later still see us.
+            // The presence map evicts entries whose TTL has elapsed, so
+            // missing one re-announce window means we go offline to peers.
+            let presence_node = node.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(reannounce_secs));
+                interval.tick().await; // skip the immediate first tick
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = presence_node.announce_presence_with_ttl(ttl_secs).await {
+                        eprintln!("Warning: presence re-announce failed: {}", e);
+                    }
+                }
+            });
+
+            // Inbox loop.
             loop {
                 match node.poll_tasks().await {
                     Ok(tasks) => {
@@ -93,10 +153,10 @@ pub async fn handle(
                         }
                     }
                     Err(e) => {
-                        eprintln!("Poll error (is nwaku running?): {}", e);
+                        eprintln!("Poll error: {}", e);
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         }
         AgentAction::Discover => {
@@ -143,7 +203,7 @@ pub async fn handle(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Discovery failed (is nwaku running?): {}", e);
+                    eprintln!("Discovery failed: {}", e);
                 }
             }
         }

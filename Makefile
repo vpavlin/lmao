@@ -1,4 +1,4 @@
-.PHONY: build test clippy fmt check doc clean examples bench demo-logos-core demo-logos-core-real
+.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-logos-core demo-logos-core-real cli-logos-delivery
 
 # Build all crates
 build:
@@ -39,8 +39,19 @@ examples:
 bench:
 	~/.cargo/bin/cargo bench --workspace
 
-# Run the two-agent demo
-demo:
+# Real-network CLI demo on logos.dev — two agents + a delegating client,
+# all CLI processes, all over real Logos Messaging gossip.
+#
+# Requires liblogosdelivery.so. Set LIBLOGOSDELIVERY_LIB_DIR before invoking.
+demo: cli-logos-delivery
+	@LIBLOGOSDELIVERY_LIB_DIR="$(LIBLOGOSDELIVERY_LIB_DIR)" ./scripts/demo.sh
+
+# Build the CLI with the logos-delivery transport feature enabled.
+cli-logos-delivery:
+	~/.cargo/bin/cargo build --release -p logos-messaging-a2a-cli --features logos-delivery
+
+# In-memory two-agent demo — no native deps, fast smoke test.
+demo-in-memory:
 	~/.cargo/bin/cargo run --example two_agents
 
 # Run the ping-pong demo (optionally encrypted)
