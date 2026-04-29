@@ -14,6 +14,20 @@ pub enum TransportKind {
     Rest,
 }
 
+/// Optional storage backend for offloading exec audit logs (and, in
+/// future, large task payloads). When configured, agents upload the
+/// captured stderr from each `--exec` invocation and append the
+/// resulting CID to the LMAO response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum StorageKind {
+    /// No storage; exec logs are dropped.
+    #[default]
+    None,
+    /// Embedded Logos Storage (Codex) node via libstorage FFI.
+    #[cfg(feature = "libstorage")]
+    Libstorage,
+}
+
 #[cfg(not(any(feature = "logos-delivery", feature = "rest")))]
 compile_error!("at least one of `logos-delivery` or `rest` features must be enabled");
 
@@ -61,6 +75,23 @@ pub struct Cli {
     /// Override when running multiple agents on the same host.
     #[arg(long, default_value_t = 0, global = true)]
     pub udp_port: u16,
+
+    /// Storage backend for the audit log of each task's exec output.
+    /// `libstorage` embeds a Logos Storage node in-process; `none`
+    /// drops the log.
+    #[arg(long, value_enum, global = true, default_value_t = StorageKind::default())]
+    pub storage: StorageKind,
+
+    /// Data directory for `--storage libstorage`. Defaults to a process-
+    /// scoped tempdir; persistent state is lost between runs.
+    #[arg(long, global = true)]
+    pub storage_data_dir: Option<PathBuf>,
+
+    /// UDP port for the embedded storage node's peer discovery.
+    /// 0 = backend default. Override when running multiple agents on
+    /// one host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub storage_port: u16,
 
     /// Path to a persistent identity keyfile (hex-encoded 32-byte signing key).
     /// If the file does not exist, a new key is generated and saved.

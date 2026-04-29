@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use logos_messaging_a2a_storage::StorageBackend;
 use logos_messaging_a2a_transport::Transport;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,6 +68,37 @@ async fn run_exec(cmd: &str, task_text: &str) -> Result<ExecOutput> {
     Ok(ExecOutput { response, log })
 }
 
+/// Try to upload the audit-log payload to the configured storage backend.
+/// Returns `Some(cid)` on success, `None` if no backend is configured or
+/// the log is empty. Upload errors are logged and swallowed — a failed
+/// upload should never block delivery of the agent's actual response.
+async fn upload_log(
+    storage: &Option<Arc<dyn StorageBackend>>,
+    log: &str,
+) -> Option<String> {
+    let backend = storage.as_ref()?;
+    if log.is_empty() {
+        return None;
+    }
+    match backend.upload(log.as_bytes().to_vec()).await {
+        Ok(cid) => Some(cid),
+        Err(e) => {
+            eprintln!("  Storage upload failed: {e}");
+            None
+        }
+    }
+}
+
+/// Format the LMAO response text — agent's answer plus, when storage is
+/// configured, a content-addressed pointer to the full execution log so
+/// the receiver can audit the run after the fact.
+fn format_response(answer: &str, log_cid: Option<&str>) -> String {
+    match log_cid {
+        Some(cid) => format!("{answer}\n\n---\nexecution log: codex://{cid}"),
+        None => answer.to_string(),
+    }
+}
+
 /// Presence announcements are valid for this long; the agent re-announces
 /// well before TTL so a peer that joins the mesh during the window still
 /// sees us. Override with `LMAO_PRESENCE_TTL_SECS` (the matching re-announce
@@ -86,6 +118,7 @@ const STARTUP_GOSSIP_WAIT: Duration = Duration::from_secs(3);
 pub async fn handle(
     action: AgentAction,
     transport: Arc<dyn Transport>,
+    storage: Option<Arc<dyn StorageBackend>>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
@@ -195,7 +228,11 @@ pub async fn handle(
                                     let response = match run_exec(&exec, text).await {
                                         Ok(out) => {
                                             event["log_bytes"] = serde_json::json!(out.log.len());
-                                            out.response
+                                            let cid = upload_log(&storage, &out.log).await;
+                                            if let Some(ref c) = cid {
+                                                event["log_cid"] = serde_json::json!(c);
+                                            }
+                                            format_response(&out.response, cid.as_deref())
                                         }
                                         Err(e) => {
                                             event["exec_error"] = serde_json::json!(e.to_string());
@@ -221,7 +258,11 @@ pub async fn handle(
                                             if !out.log.is_empty() {
                                                 println!("  Exec log: {} bytes", out.log.len());
                                             }
-                                            out.response
+                                            let cid = upload_log(&storage, &out.log).await;
+                                            if let Some(ref c) = cid {
+                                                println!("  Uploaded log → codex://{c}");
+                                            }
+                                            format_response(&out.response, cid.as_deref())
                                         }
                                         Err(e) => {
                                             eprintln!("  Exec failed: {e}");
@@ -231,8 +272,6 @@ pub async fn handle(
                                     if let Err(e) = node.respond(&task, &response).await {
                                         eprintln!("  Failed to respond: {}", e);
                                     } else {
-                                        // Truncate the printed response so a long agent
-                                        // answer doesn't dominate the terminal.
                                         let preview = if response.len() > 200 {
                                             format!("{}…", &response[..200])
                                         } else {

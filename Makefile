@@ -46,9 +46,11 @@ bench:
 demo: cli-logos-delivery
 	@LIBLOGOSDELIVERY_LIB_DIR="$(LIBLOGOSDELIVERY_LIB_DIR)" ./scripts/demo.sh
 
-# Build the CLI with the logos-delivery transport feature enabled.
+# Build the CLI with the logos-delivery transport + libstorage features.
+# liblogosdelivery.so must be on disk (LIBLOGOSDELIVERY_LIB_DIR set);
+# storage-bindings downloads its own prebuilt static blob on first build.
 cli-logos-delivery:
-	~/.cargo/bin/cargo build --release -p logos-messaging-a2a-cli --features logos-delivery
+	~/.cargo/bin/cargo build --release -p logos-messaging-a2a-cli --features logos-delivery,libstorage
 
 # In-memory two-agent demo — no native deps, fast smoke test.
 demo-in-memory:

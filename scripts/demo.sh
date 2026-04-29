@@ -75,10 +75,13 @@ else
 fi
 
 run_agent_bg() {
-  local name="$1" caps="$2" tcp="$3" udp="$4" keyfile="$5" logfile="$6" exec_cmd="$7"
-  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp)..."
+  local name="$1" caps="$2" tcp="$3" udp="$4" sport="$5" keyfile="$6" logfile="$7" exec_cmd="$8"
+  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp storage:$sport)..."
   "$BIN" \
     --transport logos-delivery \
+    --storage libstorage \
+    --storage-data-dir "$DEMO_DIR/storage-$name" \
+    --storage-port "$sport" \
     --keyfile "$keyfile" \
     --tcp-port "$tcp" --udp-port "$udp" \
     agent run --name "$name" --capabilities "$caps" --exec "$exec_cmd" \
@@ -95,8 +98,8 @@ run_agent_bg() {
 #
 # These recipes assume `~/.config/goose/config.yaml` is configured for an
 # Ollama provider and a model that's already pulled locally.
-ALICE_EXEC="${LMAO_DEMO_ALICE_EXEC:-sed 's/^/[summarized] /'}"
-BOB_EXEC="${LMAO_DEMO_BOB_EXEC:-sed 's/^/[reviewed]   /'}"
+ALICE_EXEC="${LMAO_DEMO_ALICE_EXEC:-sh -c 'echo summarizer-stderr-line >&2; sed s/^/[summarized]\ /'}"
+BOB_EXEC="${LMAO_DEMO_BOB_EXEC:-sh -c 'echo reviewer-stderr-line >&2; sed s/^/[reviewed]\ \ \ /'}"
 
 wait_for_pubkey() {
   local logfile="$1" deadline="$2"
@@ -121,9 +124,9 @@ wait_for_pubkey() {
 echo
 echo "═══ LMAO demo on logos.dev ═══"
 echo
-echo "[1/4] starting two agents (persistent identities)…"
-run_agent_bg alice "text,summarize" 60010 9010 "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
-run_agent_bg bob   "code,review"    60011 9011 "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
+echo "[1/4] starting two agents (persistent identities + embedded storage)…"
+run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
+run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
 
 echo
 echo "[2/4] waiting for each to connect to logos.dev and announce…"
