@@ -39,9 +39,19 @@ impl<T: Transport> LmaoNode<T> {
     /// sorted by `chunk_index`.
     pub async fn poll_stream_chunks(&self, task_id: &str) -> Result<Vec<TaskStreamChunk>> {
         let topic = topics::stream_topic(task_id);
-        let mut rx = self.channel.transport().subscribe(&topic).await?;
 
-        // Drain all available messages from the subscription
+        // Open the subscription on first call for this task and keep it
+        // open for the rest of the node's lifetime. Real-network gossip
+        // doesn't buffer pre-subscribe, so a subscribe-then-immediately-
+        // unsubscribe inside one call would miss every chunk arriving
+        // after the call returns.
+        let mut rx_guard = self.stream_rx.lock().await;
+        if !rx_guard.contains_key(task_id) {
+            let rx = self.channel.transport().subscribe(&topic).await?;
+            rx_guard.insert(task_id.to_string(), rx);
+        }
+        let rx = rx_guard.get_mut(task_id).unwrap();
+
         let mut new_chunks = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             if let Ok(A2AEnvelope::StreamChunk(chunk)) = serde_json::from_slice::<A2AEnvelope>(&msg)
@@ -51,8 +61,7 @@ impl<T: Transport> LmaoNode<T> {
                 }
             }
         }
-
-        let _ = self.channel.transport().unsubscribe(&topic).await;
+        drop(rx_guard);
 
         Metrics::inc_by(
             &self.metrics.stream_chunks_received,

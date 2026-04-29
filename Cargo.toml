@@ -85,3 +85,18 @@ path = "examples/task_delegation.rs"
 name = "logos_delivery_two_agents"
 path = "examples/logos_delivery_two_agents.rs"
 required-features = ["logos-delivery"]
+
+[[example]]
+name = "logos_delivery_streaming"
+path = "examples/logos_delivery_streaming.rs"
+required-features = ["logos-delivery"]
+
+[[example]]
+name = "logos_delivery_delegation"
+path = "examples/logos_delivery_delegation.rs"
+required-features = ["logos-delivery"]
+
+[[example]]
+name = "logos_delivery_encrypted"
+path = "examples/logos_delivery_encrypted.rs"
+required-features = ["logos-delivery"]

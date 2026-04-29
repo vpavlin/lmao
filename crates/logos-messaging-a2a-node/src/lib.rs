@@ -101,6 +101,9 @@ pub struct LmaoNode<T: Transport> {
     /// real-network gossip mesh aren't missed in the gap between
     /// subscribe and unsubscribe.
     discover_rx: tokio::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+    /// Per-task persistent subscription to stream topics. Same rationale
+    /// as `discover_rx` — real gossip transports don't buffer pre-subscribe.
+    stream_rx: tokio::sync::Mutex<HashMap<String, mpsc::Receiver<Vec<u8>>>>,
     /// Active conversation sessions.
     sessions: std::sync::Mutex<HashMap<String, Session>>,
     /// Optional storage offload for large payloads.
@@ -158,6 +161,7 @@ impl<T: Transport> LmaoNode<T> {
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
             discover_rx: tokio::sync::Mutex::new(None),
+            stream_rx: tokio::sync::Mutex::new(HashMap::new()),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -210,6 +214,7 @@ impl<T: Transport> LmaoNode<T> {
             identity: Some(identity),
             task_rx: tokio::sync::Mutex::new(None),
             discover_rx: tokio::sync::Mutex::new(None),
+            stream_rx: tokio::sync::Mutex::new(HashMap::new()),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -259,6 +264,7 @@ impl<T: Transport> LmaoNode<T> {
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
             discover_rx: tokio::sync::Mutex::new(None),
+            stream_rx: tokio::sync::Mutex::new(HashMap::new()),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -392,6 +398,7 @@ impl<T: Transport> LmaoNode<T> {
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
             discover_rx: tokio::sync::Mutex::new(None),
+            stream_rx: tokio::sync::Mutex::new(HashMap::new()),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
