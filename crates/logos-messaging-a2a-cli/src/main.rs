@@ -3,6 +3,7 @@ mod cli;
 mod common;
 mod completion;
 mod daemon;
+mod daemon_cmd;
 mod health;
 mod info;
 mod metrics;
@@ -46,6 +47,9 @@ async fn main() -> Result<()> {
     if let Commands::Storage { action } = cli.command {
         return storage::handle(action, daemon_socket.as_ref(), cli.json).await;
     }
+    if let Commands::Daemon { action } = cli.command {
+        return daemon_cmd::handle(action, daemon_socket.as_ref(), cli.json).await;
+    }
 
     let transport: Arc<dyn Transport> = build_transport(&cli).await?;
     let storage: Option<Arc<dyn StorageBackend>> = build_storage(&cli).await?;
@@ -69,6 +73,7 @@ async fn main() -> Result<()> {
         }
         Commands::Info => unreachable!("handled above"),
         Commands::Storage { .. } => unreachable!("handled above"),
+        Commands::Daemon { .. } => unreachable!("handled above"),
     }
 }
 

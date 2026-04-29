@@ -157,6 +157,19 @@ pub enum Commands {
         #[command(subcommand)]
         action: StorageAction,
     },
+    /// Manage a running daemon (the long-lived `lmao agent run` process).
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DaemonAction {
+    /// Show daemon identity, uptime, and configuration.
+    Status,
+    /// Ask the daemon to gracefully shut down (drains in-flight work).
+    Stop,
 }
 
 #[derive(Debug, Subcommand)]
