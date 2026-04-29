@@ -1,11 +1,12 @@
 use anyhow::Result;
 use logos_messaging_a2a_node::LmaoNode;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 
 use crate::common::IdentityConfig;
 
 pub async fn handle(
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
@@ -13,7 +14,7 @@ pub async fn handle(
     print_metrics(&node, json)
 }
 
-fn print_metrics(node: &LmaoNode<LogosMessagingTransport>, json: bool) -> Result<()> {
+fn print_metrics(node: &LmaoNode<Arc<dyn Transport>>, json: bool) -> Result<()> {
     let snap = node.metrics();
 
     if json {

@@ -1,6 +1,35 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
+
+/// Available transport backends. Variants are gated by Cargo features so
+/// the CLI only exposes choices it can actually construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TransportKind {
+    /// Embedded Logos Messaging node via liblogosdelivery FFI.
+    #[cfg(feature = "logos-delivery")]
+    LogosDelivery,
+    /// External nwaku node over the REST API.
+    #[cfg(feature = "rest")]
+    Rest,
+}
+
+#[cfg(not(any(feature = "logos-delivery", feature = "rest")))]
+compile_error!("at least one of `logos-delivery` or `rest` features must be enabled");
+
+impl Default for TransportKind {
+    /// Prefer logos-delivery when compiled in — it's the production path.
+    #[cfg(feature = "logos-delivery")]
+    fn default() -> Self {
+        TransportKind::LogosDelivery
+    }
+
+    /// REST fallback when logos-delivery is disabled.
+    #[cfg(all(not(feature = "logos-delivery"), feature = "rest"))]
+    fn default() -> Self {
+        TransportKind::Rest
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -8,9 +37,20 @@ use std::path::PathBuf;
     about = "A2A protocol over Waku decentralized transport"
 )]
 pub struct Cli {
-    /// nwaku REST API URL
+    /// Transport backend. `logos-delivery` (default when compiled in) embeds a
+    /// Logos Messaging node in-process via liblogosdelivery; `rest` talks to an
+    /// external nwaku node via REST.
+    #[arg(long, value_enum, global = true, default_value_t = TransportKind::default())]
+    pub transport: TransportKind,
+
+    /// nwaku REST API URL (only used when `--transport rest`).
     #[arg(long, default_value = "http://localhost:8645", global = true)]
     pub waku: String,
+
+    /// Logos Messaging network preset for the embedded node
+    /// (only used when `--transport logos-delivery`).
+    #[arg(long, default_value = "logos.dev", global = true)]
+    pub preset: String,
 
     /// Path to a persistent identity keyfile (hex-encoded 32-byte signing key).
     /// If the file does not exist, a new key is generated and saved.

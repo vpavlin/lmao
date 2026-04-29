@@ -1,5 +1,6 @@
 use anyhow::Result;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 use std::collections::HashSet;
 
 use crate::cli::PresenceAction;
@@ -33,7 +34,7 @@ fn peer_to_json(
 
 pub async fn handle(
     action: PresenceAction,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {

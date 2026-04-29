@@ -7,10 +7,15 @@ edition = "2021"
 name = "logos-messaging-a2a"
 path = "src/main.rs"
 
+[features]
+default = ["rest"]
+rest = ["logos-messaging-a2a-transport/rest"]
+logos-delivery = ["logos-messaging-a2a-transport/logos-delivery"]
+
 [dependencies]
 logos-messaging-a2a-crypto = { path = "../logos-messaging-a2a-crypto" }
 logos-messaging-a2a-core = { path = "../logos-messaging-a2a-core" }
-logos-messaging-a2a-transport = { path = "../logos-messaging-a2a-transport" }
+logos-messaging-a2a-transport = { path = "../logos-messaging-a2a-transport", default-features = false }
 logos-messaging-a2a-node = { path = "../logos-messaging-a2a-node" }
 tokio = { workspace = true }
 serde = { workspace = true }

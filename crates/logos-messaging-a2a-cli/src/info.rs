@@ -1,12 +1,13 @@
 use anyhow::Result;
 use logos_messaging_a2a_core::topics;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 
 use crate::common::{build_node, IdentityConfig};
 
 /// Display agent identity and topic configuration.
 pub fn handle(
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
@@ -48,10 +49,11 @@ pub fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use logos_messaging_a2a_transport::memory::InMemoryTransport;
 
     /// Helper: build a node and return the info fields as JSON.
     fn info_json(encrypt: bool) -> serde_json::Value {
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let identity = IdentityConfig {
             keyfile: None,
             encrypt,
@@ -106,7 +108,7 @@ mod tests {
     fn keyfile_identity_is_stable() {
         let dir = tempfile::tempdir().unwrap();
         let keypath = dir.path().join("test.key");
-        let transport1 = LogosMessagingTransport::new("http://localhost:8645");
+        let transport1: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let identity = IdentityConfig {
             keyfile: Some(keypath.clone()),
             encrypt: false,
@@ -114,7 +116,7 @@ mod tests {
         let node1 = build_node("info", "test", vec![], transport1, &identity).unwrap();
         let pk1 = node1.pubkey().to_string();
 
-        let transport2 = LogosMessagingTransport::new("http://localhost:8645");
+        let transport2: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let node2 = build_node("info", "test", vec![], transport2, &identity).unwrap();
         let pk2 = node2.pubkey().to_string();
 

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use logos_messaging_a2a_node::LmaoNode;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub fn parse_capabilities(capabilities: &str) -> Vec<String> {
     capabilities
@@ -29,9 +30,9 @@ pub fn build_node(
     name: &str,
     description: &str,
     capabilities: Vec<String>,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
-) -> Result<LmaoNode<LogosMessagingTransport>> {
+) -> Result<LmaoNode<Arc<dyn Transport>>> {
     let node = if let Some(ref path) = identity.keyfile {
         LmaoNode::from_keyfile(name, description, capabilities, transport, path)?
     } else if identity.encrypt {
@@ -45,6 +46,7 @@ pub fn build_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use logos_messaging_a2a_transport::memory::InMemoryTransport;
 
     #[test]
     fn parse_single_capability() {
@@ -61,7 +63,7 @@ mod tests {
 
     #[test]
     fn build_node_ephemeral() {
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: None,
             encrypt: false,
@@ -72,7 +74,7 @@ mod tests {
 
     #[test]
     fn build_node_encrypted() {
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: None,
             encrypt: true,
@@ -85,7 +87,7 @@ mod tests {
     fn build_node_with_keyfile() {
         let dir = tempfile::tempdir().unwrap();
         let keypath = dir.path().join("test.key");
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: Some(keypath.clone()),
             encrypt: false,
@@ -94,7 +96,7 @@ mod tests {
         let pk1 = node1.pubkey().to_string();
 
         // Second build with same keyfile should produce same pubkey
-        let transport2 = LogosMessagingTransport::new("http://localhost:8645");
+        let transport2: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let node2 = build_node("test", "test node", vec![], transport2, &id).unwrap();
         assert_eq!(pk1, node2.pubkey());
     }

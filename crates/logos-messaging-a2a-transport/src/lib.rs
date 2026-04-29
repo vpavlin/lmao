@@ -56,12 +56,18 @@ pub mod logos_delivery;
 #[cfg(feature = "logos-delivery")]
 pub use logos_delivery::LogosDeliveryTransport;
 
-/// Swappable transport trait — real nwaku in production, in-memory mock in tests.
+/// Swappable transport trait — real Logos Messaging in production,
+/// in-memory mock in tests.
 ///
 /// Implementations:
-/// - `LogosMessagingTransport`: nwaku REST API (requires running nwaku node, `rest` feature)
-/// - `LogosCoreDeliveryTransport`: Logos Core IPC via delivery_module (`logos-core` feature)
-/// - `NativeWakuTransport`: native libwaku FFI via waku-bindings (`native-waku` feature)
+/// - `LogosDeliveryTransport`: embedded Logos Messaging node via
+///   liblogosdelivery FFI (`logos-delivery` feature) — the production default
+/// - `LogosMessagingTransport`: nwaku REST API (`rest` feature) — fallback
+///   when an external nwaku node is preferred
+/// - `LogosCoreDeliveryTransport`: Logos Core IPC via delivery_module
+///   (`logos-core` feature)
+/// - `NativeWakuTransport`: native libwaku FFI via waku-bindings
+///   (`native-waku` feature)
 /// - `InMemoryTransport`: in-process mock for testing (no external deps)
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
@@ -73,4 +79,19 @@ pub trait Transport: Send + Sync + 'static {
 
     /// Unsubscribe from a content topic.
     async fn unsubscribe(&self, topic: &str) -> Result<()>;
+}
+
+#[async_trait]
+impl Transport for std::sync::Arc<dyn Transport> {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        (**self).publish(topic, payload).await
+    }
+
+    async fn subscribe(&self, topic: &str) -> Result<mpsc::Receiver<Vec<u8>>> {
+        (**self).subscribe(topic).await
+    }
+
+    async fn unsubscribe(&self, topic: &str) -> Result<()> {
+        (**self).unsubscribe(topic).await
+    }
 }

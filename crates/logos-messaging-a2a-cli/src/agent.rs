@@ -1,12 +1,13 @@
 use anyhow::Result;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 
 use crate::cli::AgentAction;
 use crate::common::{build_node, parse_capabilities, IdentityConfig};
 
 pub async fn handle(
     action: AgentAction,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
