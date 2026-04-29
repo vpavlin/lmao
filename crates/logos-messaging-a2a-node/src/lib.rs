@@ -96,6 +96,11 @@ pub struct LmaoNode<T: Transport> {
     identity: Option<AgentIdentity>,
     /// Persistent subscription to this node's task topic (lazy-initialized).
     task_rx: tokio::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+    /// Persistent subscription to the discovery topic (lazy-initialized).
+    /// Kept open between `discover()` calls so messages arriving on a
+    /// real-network gossip mesh aren't missed in the gap between
+    /// subscribe and unsubscribe.
+    discover_rx: tokio::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     /// Active conversation sessions.
     sessions: std::sync::Mutex<HashMap<String, Session>>,
     /// Optional storage offload for large payloads.
@@ -152,6 +157,7 @@ impl<T: Transport> LmaoNode<T> {
             signing_key,
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
+            discover_rx: tokio::sync::Mutex::new(None),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -203,6 +209,7 @@ impl<T: Transport> LmaoNode<T> {
             signing_key,
             identity: Some(identity),
             task_rx: tokio::sync::Mutex::new(None),
+            discover_rx: tokio::sync::Mutex::new(None),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -251,6 +258,7 @@ impl<T: Transport> LmaoNode<T> {
             signing_key,
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
+            discover_rx: tokio::sync::Mutex::new(None),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,
@@ -383,6 +391,7 @@ impl<T: Transport> LmaoNode<T> {
             signing_key,
             identity: None,
             task_rx: tokio::sync::Mutex::new(None),
+            discover_rx: tokio::sync::Mutex::new(None),
             sessions: std::sync::Mutex::new(HashMap::new()),
             storage_offload: None,
             payment: None,

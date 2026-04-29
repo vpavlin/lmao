@@ -113,7 +113,7 @@ mod tests {
             agent_id: "02abcdef".to_string(),
             name: "echo".to_string(),
             capabilities: vec!["text".to_string(), "summarize".to_string()],
-            waku_topic: "/lmao/1/task/02abcdef/proto".to_string(),
+            waku_topic: "/lmao/1/task-02abcdef/proto".to_string(),
             ttl_secs: 300,
             signature: None,
         };
@@ -152,7 +152,7 @@ mod tests {
             agent_id: pubkey_hex(key),
             name: "test-agent".to_string(),
             capabilities: vec!["echo".to_string(), "summarize".to_string()],
-            waku_topic: "/lmao/1/task/test/proto".to_string(),
+            waku_topic: "/lmao/1/task-test/proto".to_string(),
             ttl_secs: 300,
             signature: None,
         };
@@ -449,7 +449,7 @@ mod tests {
             agent_id: pubkey_hex(&key),
             name: "日本語エージェント".to_string(),
             capabilities: vec!["翻訳".to_string()],
-            waku_topic: "/lmao/1/task/unicode/proto".to_string(),
+            waku_topic: "/lmao/1/task-unicode/proto".to_string(),
             ttl_secs: 120,
             signature: None,
         };

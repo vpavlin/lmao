@@ -52,6 +52,16 @@ pub struct Cli {
     #[arg(long, default_value = "logos.dev", global = true)]
     pub preset: String,
 
+    /// libp2p TCP listen port for the embedded node. 0 = OS-assigned.
+    /// Override when running multiple agents on the same host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub tcp_port: u16,
+
+    /// discv5 UDP port for the embedded node. 0 = OS-assigned.
+    /// Override when running multiple agents on the same host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub udp_port: u16,
+
     /// Path to a persistent identity keyfile (hex-encoded 32-byte signing key).
     /// If the file does not exist, a new key is generated and saved.
     /// When provided, all commands share the same identity.

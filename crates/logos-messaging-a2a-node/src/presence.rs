@@ -153,7 +153,7 @@ mod tests {
             agent_id: agent_id.to_string(),
             name: name.to_string(),
             capabilities: caps.into_iter().map(String::from).collect(),
-            waku_topic: format!("/lmao/1/task/{}/proto", agent_id),
+            waku_topic: format!("/lmao/1/task-{}/proto", agent_id),
             ttl_secs: ttl,
             signature: None,
         }
@@ -436,7 +436,7 @@ mod tests {
         map.update(&ann);
 
         let info = map.get("peer1").unwrap();
-        assert_eq!(info.waku_topic, "/lmao/1/task/peer1/proto");
+        assert_eq!(info.waku_topic, "/lmao/1/task-peer1/proto");
     }
 
     #[test]

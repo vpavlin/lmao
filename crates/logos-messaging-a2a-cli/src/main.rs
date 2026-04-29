@@ -60,6 +60,12 @@ async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
             };
             let mut config = NodeConfig::logos_dev();
             config.preset = Some(cli.preset.clone());
+            if cli.tcp_port != 0 {
+                config.tcp_port = Some(cli.tcp_port);
+            }
+            if cli.udp_port != 0 {
+                config.discv5_udp_port = Some(cli.udp_port);
+            }
             let t = LogosDeliveryTransport::new(config).await?;
             Ok(Arc::new(t))
         }

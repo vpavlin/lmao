@@ -245,7 +245,7 @@ impl<T: Transport> MessageChannel<T> {
         let message_id = compute_message_id(payload);
         let ts = self.next_timestamp();
         let causal_history = self.build_causal_history();
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
 
         let msg = ContentMessage {
             message_id: message_id.clone(),
@@ -306,7 +306,7 @@ impl<T: Transport> MessageChannel<T> {
 
     /// Send an explicit ACK for a received message.
     pub async fn send_ack(&self, _topic_prefix: &str, message_id: &str) -> Result<()> {
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
         let ack_payload = serde_json::to_vec(&serde_json::json!({
             "type": "ack",
             "message_id": message_id,
@@ -756,7 +756,7 @@ mod tests {
         // Pre-publish an ACK
         let payload = b"hello reliable";
         let message_id = compute_message_id(payload);
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
         let ack_payload = serde_json::to_vec(&serde_json::json!({
             "type": "ack",
             "message_id": message_id,
@@ -1249,7 +1249,7 @@ mod edge_tests {
         let transport = InMemoryTransport::new();
         let ch = MessageChannel::new("ch".into(), "alice".into(), transport.clone());
 
-        let ack_topic = "/lmao/1/ack/test-msg-id/proto";
+        let ack_topic = "/lmao/1/ack-test-msg-id/proto";
         let mut rx = transport.subscribe(ack_topic).await.unwrap();
 
         ch.send_ack("/test", "test-msg-id").await.unwrap();

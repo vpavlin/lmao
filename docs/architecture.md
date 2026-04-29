@@ -90,8 +90,8 @@
 │  │  Content Topics:                                        │         │
 │  │  /lmao/1/discovery/proto        AgentCard broadcasts    │         │
 │  │  /lmao/1/presence/proto         Presence heartbeats     │         │
-│  │  /lmao/1/task/{pubkey}/proto    Task inbox per agent    │         │
-│  │  /lmao/1/ack/{msg_id}/proto     SDS acknowledgements   │         │
+│  │  /lmao/1/task-{pubkey}/proto    Task inbox per agent    │         │
+│  │  /lmao/1/ack-{msg_id}/proto     SDS acknowledgements   │         │
 │  │                                                         │         │
 │  └─────────────────────────────────────────────────────────┘         │
 │                                                                      │
@@ -212,14 +212,14 @@ Agent A                    Waku Network                  Agent B
   │── discover() ─────────────▶│                            │
   │◀── [AgentCard B] ─────────│                            │
   │                            │                            │
-  │── send_task(Task) ────────▶│ /lmao/1/task/{B}/proto     │
+  │── send_task(Task) ────────▶│ /lmao/1/task-{B}/proto     │
   │                            │──────── poll_tasks() ─────▶│
   │                            │                            │
   │   (SDS: wait for ACK)      │◀── send_ack(task.id) ─────│
   │◀── ACK on /ack/{id}/proto─│                            │
   │                            │                            │
   │                            │◀── respond(result) ───────│
-  │◀── poll_tasks() ──────────│ /lmao/1/task/{A}/proto     │
+  │◀── poll_tasks() ──────────│ /lmao/1/task-{A}/proto     │
   │                            │                            │
 ```
 

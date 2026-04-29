@@ -27,9 +27,9 @@ Google's A2A protocol is great. But it assumes HTTP: stable endpoints, central r
 │              Logos Messaging Network                 │
 │                                                      │
 │  /lmao/1/discovery/proto     ← AgentCard broadcasts │
-│  /lmao/1/task/{pubkey}/proto ← Task inbox per agent │
-│  /lmao/1/stream/{task_id}/proto ← Task streaming    │
-│  /lmao/1/ack/{msg_id}/proto  ← SDS acknowledgements │
+│  /lmao/1/task-{pubkey}/proto ← Task inbox per agent │
+│  /lmao/1/stream-{task_id}/proto ← Task streaming    │
+│  /lmao/1/ack-{msg_id}/proto  ← SDS acknowledgements │
 │  /lmao/1/presence/proto       ← Peer discovery        │
 └──────────┬──────────────┬──────────────┬─────────────┘
            │              │              │
@@ -515,7 +515,7 @@ dedicated Waku topics. This is useful for long-running tasks (e.g. LLM token
 output) where the caller wants to display progress before the full result is
 ready.
 
-Each task gets its own stream topic: `/lmao/1/stream/{task_id}/proto`.
+Each task gets its own stream topic: `/lmao/1/stream-{task_id}/proto`.
 Chunks carry an incrementing index and the final chunk is flagged with
 `is_final = true`. The receiver polls for chunks, buffers them in order, and
 reassembles the full text once the final chunk arrives.

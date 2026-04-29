@@ -26,13 +26,33 @@ impl<T: Transport> LmaoNode<T> {
         Ok(())
     }
 
-    /// Discover agents by subscribing to the discovery topic and draining messages.
+    /// Discover agents by draining the discovery topic.
+    ///
+    /// The subscription is opened lazily on the first call and kept alive
+    /// for the lifetime of the node, so repeated calls return only what
+    /// has arrived since the previous call. This matters on real-network
+    /// gossip transports where messages aren't buffered before subscribe —
+    /// the previous implementation subscribed-and-immediately-unsubscribed
+    /// inside each call and missed everything between.
+    ///
+    /// Typical usage on a real network:
+    /// ```ignore
+    /// node.discover().await?;          // open subscription
+    /// node.announce().await?;          // peers announce
+    /// tokio::time::sleep(Duration::from_secs(3)).await;
+    /// let cards = node.discover().await?;  // drain
+    /// ```
     pub async fn discover(&self) -> Result<Vec<AgentCard>> {
-        let mut rx = self
-            .channel
-            .transport()
-            .subscribe(topics::DISCOVERY)
-            .await?;
+        let mut rx_guard = self.discover_rx.lock().await;
+        if rx_guard.is_none() {
+            *rx_guard = Some(
+                self.channel
+                    .transport()
+                    .subscribe(topics::DISCOVERY)
+                    .await?,
+            );
+        }
+        let rx = rx_guard.as_mut().unwrap();
 
         let mut cards = Vec::new();
         while let Ok(msg) = rx.try_recv() {
@@ -43,11 +63,6 @@ impl<T: Transport> LmaoNode<T> {
             }
         }
 
-        let _ = self
-            .channel
-            .transport()
-            .unsubscribe(topics::DISCOVERY)
-            .await;
         Metrics::inc_by(&self.metrics.discoveries, cards.len() as u64);
         Ok(cards)
     }

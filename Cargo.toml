@@ -43,6 +43,10 @@ bloomfilter = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[features]
+default = []
+logos-delivery = ["logos-messaging-a2a-transport/logos-delivery"]
+
 [dependencies]
 logos-messaging-a2a-crypto = { path = "crates/logos-messaging-a2a-crypto" }
 logos-messaging-a2a-core = { path = "crates/logos-messaging-a2a-core" }
@@ -76,3 +80,8 @@ path = "examples/presence_discovery.rs"
 [[example]]
 name = "task_delegation"
 path = "examples/task_delegation.rs"
+
+[[example]]
+name = "logos_delivery_two_agents"
+path = "examples/logos_delivery_two_agents.rs"
+required-features = ["logos-delivery"]

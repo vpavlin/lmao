@@ -616,7 +616,7 @@ mod tests {
             .unwrap();
 
         // Verify published on the correct stream topic
-        let expected_topic = format!("/lmao/1/stream/{}/proto", task.id);
+        let expected_topic = format!("/lmao/1/stream-{}/proto", task.id);
         let mut rx = transport.subscribe(&expected_topic).await.unwrap();
         assert!(rx.try_recv().is_ok());
     }
