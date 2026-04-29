@@ -8,6 +8,7 @@ default = ["rest"]
 rest = ["reqwest"]
 logos-core = ["base64"]
 native-waku = ["waku-bindings"]
+logos-delivery = ["base64"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -31,3 +32,8 @@ serde_json = { workspace = true }
 
 [build-dependencies]
 cc = "1"
+
+[[example]]
+name = "logos_delivery_roundtrip"
+path = "examples/logos_delivery_roundtrip.rs"
+required-features = ["logos-delivery"]

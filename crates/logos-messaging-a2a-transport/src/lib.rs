@@ -49,6 +49,13 @@ mod waku_bindings_transport;
 #[cfg(feature = "native-waku")]
 pub use waku_bindings_transport::NativeWakuTransport;
 
+#[cfg(feature = "logos-delivery")]
+mod logos_delivery_sys;
+#[cfg(feature = "logos-delivery")]
+pub mod logos_delivery;
+#[cfg(feature = "logos-delivery")]
+pub use logos_delivery::LogosDeliveryTransport;
+
 /// Swappable transport trait — real nwaku in production, in-memory mock in tests.
 ///
 /// Implementations:
