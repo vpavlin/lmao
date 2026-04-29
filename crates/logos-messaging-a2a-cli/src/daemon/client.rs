@@ -7,7 +7,7 @@
 //! the CLI keep working when no daemon is running.
 
 use anyhow::{anyhow, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -46,9 +46,6 @@ impl DaemonClient {
         Ok(response)
     }
 
-    pub fn socket_path(&self) -> &Path {
-        &self.socket_path
-    }
 }
 
 async fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
