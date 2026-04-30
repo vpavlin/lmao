@@ -10,7 +10,12 @@ use std::time::SystemTime;
 
 use crate::cli::TrustAction;
 
-pub async fn handle(action: TrustAction, trust_file: Option<PathBuf>, json: bool) -> Result<()> {
+pub async fn handle(
+    action: TrustAction,
+    trust_file: Option<PathBuf>,
+    keyfile: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
     let path = trust_file.unwrap_or_else(TrustList::default_path);
     match action {
         TrustAction::List => list(&path, json),
@@ -24,6 +29,7 @@ pub async fn handle(action: TrustAction, trust_file: Option<PathBuf>, json: bool
         TrustAction::Mode { new_mode } => mode(&path, new_mode.as_deref(), json),
         TrustAction::Import { path: src } => import(&path, &src, json),
         TrustAction::Export => export(&path),
+        TrustAction::Pubkey => pubkey(keyfile.as_deref(), json),
     }
 }
 
@@ -181,6 +187,31 @@ fn import(path: &Path, src: &str, json: bool) -> Result<()> {
             "imported {added} new entries from {src} into {}",
             path.display()
         );
+    }
+    Ok(())
+}
+
+/// Derive the secp256k1 pubkey from a keyfile (creating it if missing)
+/// without spinning up a transport. Mirrors what `LmaoNode::from_keyfile`
+/// does internally but skips every other lifecycle bit.
+fn pubkey(keyfile: Option<&Path>, json: bool) -> Result<()> {
+    let path = keyfile.ok_or_else(|| {
+        anyhow!("`lmao trust pubkey` requires --keyfile (the path to a persistent identity file)")
+    })?;
+    let transport = logos_messaging_a2a_transport::memory::InMemoryTransport::new();
+    let node = logos_messaging_a2a_node::LmaoNode::from_keyfile(
+        "trust-pubkey",
+        "trust-pubkey",
+        vec![],
+        transport,
+        path,
+    )
+    .with_context(|| format!("loading keyfile {}", path.display()))?;
+    let pk = node.pubkey().to_string();
+    if json {
+        println!("{}", serde_json::json!({ "pubkey": pk, "keyfile": path }));
+    } else {
+        println!("{pk}");
     }
     Ok(())
 }

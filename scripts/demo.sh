@@ -23,6 +23,8 @@ DEMO_DIR="${LMAO_DEMO_DIR:-$ROOT_DIR/.demo}"
 BIN="${LMAO_BIN:-$ROOT_DIR/target/release/logos-messaging-a2a}"
 ALICE_KEYFILE="$DEMO_DIR/alice.key"
 BOB_KEYFILE="$DEMO_DIR/bob.key"
+ALICE_TRUST="$DEMO_DIR/alice-trust.toml"
+BOB_TRUST="$DEMO_DIR/bob-trust.toml"
 ALICE_LOG="$DEMO_DIR/alice.log"
 BOB_LOG="$DEMO_DIR/bob.log"
 ALICE_SOCKET="$DEMO_DIR/alice.sock"
@@ -77,14 +79,15 @@ else
 fi
 
 run_agent_bg() {
-  local name="$1" caps="$2" tcp="$3" udp="$4" sport="$5" sock="$6" keyfile="$7" logfile="$8" exec_cmd="$9"
-  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp storage:$sport sock:$sock)..."
+  local name="$1" caps="$2" tcp="$3" udp="$4" sport="$5" sock="$6" keyfile="$7" trustfile="$8" logfile="$9" exec_cmd="${10}"
+  echo "  starting $name (caps: $caps, tcp:$tcp udp:$udp storage:$sport sock:$sock trust:$(basename "$trustfile"))..."
   "$BIN" \
     --transport logos-delivery \
     --storage libstorage \
     --storage-data-dir "$DEMO_DIR/storage-$name" \
     --storage-port "$sport" \
     --keyfile "$keyfile" \
+    --trust-file "$trustfile" \
     --tcp-port "$tcp" --udp-port "$udp" \
     --daemon-socket "$sock" \
     agent run --name "$name" --capabilities "$caps" --exec "$exec_cmd" \
@@ -127,16 +130,41 @@ wait_for_pubkey() {
 echo
 echo "═══ LMAO demo on logos.dev ═══"
 echo
-echo "[1/5] starting two agents (persistent identities + embedded storage + IPC sockets)…"
-run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_SOCKET" "$ALICE_KEYFILE" "$ALICE_LOG" "$ALICE_EXEC"
-run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_SOCKET"   "$BOB_KEYFILE"   "$BOB_LOG"   "$BOB_EXEC"
+
+# Pre-derive each agent's pubkey from its keyfile (creating the keyfile
+# if missing). `lmao trust pubkey` runs over an in-process InMemory
+# transport — no liblogosdelivery, no mesh-join cost, ~10 ms per call.
+echo "[1/5] preparing identities + friend-keyring trust lists…"
+ALICE_PK="$("$BIN" --keyfile "$ALICE_KEYFILE" trust pubkey)"
+BOB_PK="$(  "$BIN" --keyfile "$BOB_KEYFILE"   trust pubkey)"
+
+# Fresh trust files for this demo run. Each agent trusts the other for
+# the capabilities the other actually advertises. `trust add` flips Off
+# → Enforce on the first entry, so by the time the agent starts the
+# filter is live.
+rm -f "$ALICE_TRUST" "$BOB_TRUST"
+"$BIN" --trust-file "$ALICE_TRUST" trust add "$BOB_PK"   --nickname bob   --cap code --cap review    >/dev/null 2>&1
+"$BIN" --trust-file "$BOB_TRUST"   trust add "$ALICE_PK" --nickname alice --cap text --cap summarize >/dev/null 2>&1
+echo "  alice (${ALICE_PK:0:16}…) trusts bob   for code,review"
+echo "  bob   (${BOB_PK:0:16}…) trusts alice for text,summarize"
 
 echo
-echo "[2/5] waiting for each to connect to logos.dev and announce…"
-ALICE_PK="$(wait_for_pubkey "$ALICE_LOG" 30)"
-BOB_PK="$(wait_for_pubkey "$BOB_LOG"   30)"
-echo "  alice pubkey: ${ALICE_PK:0:16}…"
-echo "  bob   pubkey: ${BOB_PK:0:16}…"
+echo "[2/5] starting two agents (persistent identities + Codex + IPC sockets + trust filter)…"
+run_agent_bg alice "text,summarize" 60010 9010 19200 "$ALICE_SOCKET" "$ALICE_KEYFILE" "$ALICE_TRUST" "$ALICE_LOG" "$ALICE_EXEC"
+run_agent_bg bob   "code,review"    60011 9011 19201 "$BOB_SOCKET"   "$BOB_KEYFILE"   "$BOB_TRUST"   "$BOB_LOG"   "$BOB_EXEC"
+
+echo "  waiting for each to connect to logos.dev…"
+ALICE_PK_LOGGED="$(wait_for_pubkey "$ALICE_LOG" 30)"
+BOB_PK_LOGGED="$(  wait_for_pubkey "$BOB_LOG"   30)"
+# Sanity: the keyfile-derived pubkey we used to seed the trust file
+# matches the one the actual agent advertises. If these diverge, the
+# trust filter would silently drop legitimate traffic.
+if [[ "$ALICE_PK_LOGGED" != "$ALICE_PK" || "$BOB_PK_LOGGED" != "$BOB_PK" ]]; then
+  echo "error: keyfile-derived pubkey doesn't match agent-runtime pubkey" >&2
+  echo "       alice: derived=${ALICE_PK:0:16}… runtime=${ALICE_PK_LOGGED:0:16}…" >&2
+  echo "       bob:   derived=${BOB_PK:0:16}… runtime=${BOB_PK_LOGGED:0:16}…"   >&2
+  exit 1
+fi
 
 # Give both agents time to see the gossip mesh + complete announce/presence.
 # 12s is a comfortable margin for the logos.dev fleet.
@@ -153,6 +181,8 @@ echo "[3/5] discovering peers via presence (through alice's daemon — no new no
 
 echo
 echo "[4/5] delegating a task by capability=code → bob (via alice's daemon)…"
+echo "  alice's CapabilityMatch picks from peers ∩ trust list — bob qualifies;"
+echo "  any stranger advertising 'code' on the gossip mesh would be filtered out."
 DELEGATE_OUT="$DEMO_DIR/delegate.out"
 "$BIN" --daemon-socket "$ALICE_SOCKET" \
   task delegate \

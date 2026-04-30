@@ -75,19 +75,23 @@ make demo
 ```
 ═══ LMAO demo on logos.dev ═══
 
-[1/5] starting two agents (persistent identities + embedded storage + IPC sockets)…
-  starting alice (caps: text,summarize, tcp:60010 udp:9010 storage:19200 sock:.demo/alice.sock)...
-  starting bob (caps: code,review, tcp:60011 udp:9011 storage:19201 sock:.demo/bob.sock)...
+[1/5] preparing identities + friend-keyring trust lists…
+  alice (037f5a93b57295d2…) trusts bob   for code,review
+  bob   (02df631ad6f0ac99…) trusts alice for text,summarize
 
-[2/5] waiting for each to connect to logos.dev and announce…
-  alice pubkey: 02ab1234567890ab…
-  bob   pubkey: 03cd9876543210cd…
+[2/5] starting two agents (persistent identities + Codex + IPC sockets + trust filter)…
+  starting alice (caps: text,summarize, … trust:alice-trust.toml)...
+  starting bob   (caps: code,review,    … trust:bob-trust.toml)...
+  waiting for each to connect to logos.dev…
 ```
 
 **Say**: "Two processes, each with a persistent secp256k1 identity, each
 joining the live `logos.dev` gossip mesh on its own libp2p port. No
-servers. No central registry. This is the same fleet a Logos Messaging
-client elsewhere on the planet sees."
+servers. No central registry. **And before they even start, they
+exchange pubkeys and write a local trust file** — alice's lists bob,
+bob's lists alice. That's the whole trust layer in v1: SSH `known_hosts`
+for agents. The agents read the file at startup; from now on neither
+will accept a task from a stranger or delegate to one."
 
 The `wait_for_pubkey` helper holds the script until each agent prints
 its pubkey, which happens once it's *actually* connected to the mesh —
@@ -119,6 +123,8 @@ This is the key architectural beat. Linger here.
 
 ```
 [4/5] delegating a task by capability=code → bob (via alice's daemon)…
+  alice's CapabilityMatch picks from peers ∩ trust list — bob qualifies;
+  any stranger advertising 'code' on the gossip mesh would be filtered out.
 delegating to bob (caps=[code,review]) for parent task <uuid>…
 result from bob: <Goose output>
 
@@ -126,10 +132,12 @@ execution log: codex://Qm…
 ```
 
 **Say**: "Alice didn't address bob by pubkey — she said 'whoever has the
-`code` capability'. The delegation strategy is `CapabilityMatch`. Bob
-got the task, ran it through Goose, and replied with the answer plus a
-**content-addressed pointer to the full execution log** — every LLM
-message, every tool call, every error — uploaded to embedded Codex."
+`code` capability'. The delegation strategy is `CapabilityMatch`, **but
+the candidate set is intersected with the trust list first.** Even if
+someone else on logos.dev advertises `code`, alice would skip them.
+Bob got the task, ran it through Goose, and replied with the answer
+plus a **content-addressed pointer to the full execution log** — every
+LLM message, every tool call, every error — uploaded to embedded Codex."
 
 Substitutions for the live audience to land the point:
 

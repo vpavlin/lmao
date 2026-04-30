@@ -214,6 +214,11 @@ pub enum TrustAction {
     },
     /// Print the trust list as TOML on stdout.
     Export,
+    /// Print the secp256k1 pubkey for the configured `--keyfile` and
+    /// exit. Reads (creates if missing) the keyfile without spinning up
+    /// a transport — useful for derive-then-share workflows that don't
+    /// want to pay the cost of joining the gossip mesh.
+    Pubkey,
 }
 
 #[derive(Debug, Subcommand)]
