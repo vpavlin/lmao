@@ -12,8 +12,71 @@ import QtQuick.Layouts
 //   3. Delegate   — capability + text → routed task → response
 //   4. Trust      — friend-keyring management (mode, list, add/remove)
 //   5. Audit      — paste a codex:// CID, fetch the bytes
+//
+// Visual tokens (`theme`) mirror the Logos Design System palette + spacing
+// (logos-co/logos-design-system, src/qml/theme/{ColorPalette,DarkTheme,
+// Spacing}.qml) — kept inline here because mkLogosQmlModule has no hook
+// to bundle the upstream Logos.Theme module into a ui_qml plugin's QML
+// import path. When LMAO is published to the upstream catalog and gets
+// picked up by a richer build pipeline, swap this for `import Logos.Theme`
+// + `readonly property var theme: Theme` and the rest of the UI is
+// already token-driven.
 Item {
     id: root
+
+    // ── Logos Design System tokens (inline mirror) ───────────────
+    QtObject {
+        id: theme
+
+        // Backgrounds
+        readonly property color background:        "#171717"  // gray900
+        readonly property color backgroundElevated: "#0E121B"  // gray950 — header, inputs
+        readonly property color backgroundSecondary: "#262626" // gray850 — panes
+        readonly property color backgroundInset:    "#141414"  // gray925 — list rows
+
+        // Text
+        readonly property color text:          "#FFFFFF"
+        readonly property color textSecondary: "#A4A4A4"  // gray400
+        readonly property color textTertiary:  "#969696"  // gray500
+        readonly property color textMuted:     "#5C5C5C"  // gray700
+
+        // Borders
+        readonly property color border:        "#434343"  // gray300
+        readonly property color borderSubtle:  "#333333"  // gray330
+        readonly property color borderDark:    "#2F2F2F"  // gray340
+
+        // Status / accents
+        readonly property color success:    "#49F563"  // green500
+        readonly property color successSoft:"#6CCC93"  // green400 — pubkey hex
+        readonly property color warning:    "#FEBC2E"  // yellow400
+        readonly property color error:      "#FB3748"  // red500
+        readonly property color info:       "#4A90E2"  // blue400 — codex link
+        readonly property color primary:    "#ED7B58"  // orange300 — Logos accent
+
+        // Tints for status badges (low-alpha background washes)
+        readonly property color tintSuccess: Qt.rgba(0.286, 0.961, 0.388, 0.15)
+        readonly property color tintWarning: Qt.rgba(0.996, 0.737, 0.180, 0.15)
+        readonly property color tintError:   Qt.rgba(0.984, 0.216, 0.282, 0.15)
+
+        // Spacing scale
+        readonly property int spaceTiny:   4
+        readonly property int spaceSmall:  8
+        readonly property int spaceMedium: 12
+        readonly property int spaceLarge:  16
+        readonly property int spaceXLarge: 20
+
+        readonly property int radiusSmall:  4
+        readonly property int radiusMedium: 6
+        readonly property int radiusLarge:  8
+
+        // Typography
+        readonly property int fontTiny:   10
+        readonly property int fontSmall:  11
+        readonly property int fontBody:   12
+        readonly property int fontMedium: 14
+        readonly property int fontLarge:  18
+    }
+
 
     /// Helper: parse the JSON string returned by the agent module. The
     /// module wraps everything as JSON; on errors it returns
@@ -126,9 +189,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 56
-            color: "#0d1117"
+            color: theme.backgroundElevated
             radius: 6
-            border.color: "#30363d"
+            border.color: theme.border
             border.width: 1
 
             RowLayout {
@@ -158,12 +221,12 @@ Item {
                         text: "LMAO Agent"
                         font.pixelSize: 18
                         font.weight: Font.DemiBold
-                        color: "#ffffff"
+                        color: theme.text
                     }
                     Text {
                         text: "A2A coordination over Logos Messaging — local, decentralized, verifiable"
                         font.pixelSize: 10
-                        color: "#8b949e"
+                        color: theme.textSecondary
                     }
                 }
 
@@ -176,12 +239,12 @@ Item {
                     Layout.preferredHeight: 24
                     radius: 12
 
-                    readonly property color tintReady:    "#1a3f2e"
-                    readonly property color tintStarting: "#3a2d10"
-                    readonly property color tintOffline:  "#572421"
-                    readonly property color edgeReady:    "#56d364"
-                    readonly property color edgeStarting: "#f0883e"
-                    readonly property color edgeOffline:  "#f85149"
+                    readonly property color tintReady:    theme.tintSuccess
+                    readonly property color tintStarting: theme.tintWarning
+                    readonly property color tintOffline:  theme.tintError
+                    readonly property color edgeReady:    theme.success
+                    readonly property color edgeStarting: theme.warning
+                    readonly property color edgeOffline:  theme.error
 
                     color: root.daemonState === "ready"   ? tintReady
                          : root.daemonState === "starting" ? tintStarting
@@ -234,9 +297,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 110
-            color: "#161b22"
+            color: theme.backgroundSecondary
             radius: 6
-            border.color: "#30363d"
+            border.color: theme.border
             border.width: 1
 
             GridLayout {
@@ -247,23 +310,23 @@ Item {
                 columnSpacing: 16
                 rowSpacing: 4
 
-                Text { text: "Name";        color: "#8b949e"; font.pixelSize: 12 }
-                Text { text: root.statusName || "—"; color: "#ffffff"; font.pixelSize: 12 }
+                Text { text: "Name";        color: theme.textSecondary; font.pixelSize: 12 }
+                Text { text: root.statusName || "—"; color: theme.text; font.pixelSize: 12 }
 
-                Text { text: "Public key";  color: "#8b949e"; font.pixelSize: 12 }
+                Text { text: "Public key";  color: theme.textSecondary; font.pixelSize: 12 }
                 Text { text: root.shorten(root.statusPubkey, 40) || "—"
-                       color: "#7ee787"; font.pixelSize: 12; font.family: "monospace" }
+                       color: theme.successSoft; font.pixelSize: 12; font.family: "monospace" }
 
-                Text { text: "Capabilities"; color: "#8b949e"; font.pixelSize: 12 }
+                Text { text: "Capabilities"; color: theme.textSecondary; font.pixelSize: 12 }
                 Text { text: root.statusCapabilities.join(", ") || "—"
-                       color: "#ffffff"; font.pixelSize: 12 }
+                       color: theme.text; font.pixelSize: 12 }
 
-                Text { text: "Uptime";       color: "#8b949e"; font.pixelSize: 12 }
-                Text { text: root.statusUptimeSecs + " s";  color: "#ffffff"; font.pixelSize: 12 }
+                Text { text: "Uptime";       color: theme.textSecondary; font.pixelSize: 12 }
+                Text { text: root.statusUptimeSecs + " s";  color: theme.text; font.pixelSize: 12 }
 
-                Text { text: "Storage";      color: "#8b949e"; font.pixelSize: 12 }
+                Text { text: "Storage";      color: theme.textSecondary; font.pixelSize: 12 }
                 Text { text: root.statusStorageEnabled ? "enabled (libstorage)" : "disabled"
-                       color: root.statusStorageEnabled ? "#7ee787" : "#f0883e"; font.pixelSize: 12 }
+                       color: root.statusStorageEnabled ? theme.successSoft : theme.warning; font.pixelSize: 12 }
             }
         }
 
@@ -278,9 +341,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 1
-                color: "#161b22"
+                color: theme.backgroundSecondary
                 radius: 6
-                border.color: "#30363d"
+                border.color: theme.border
                 border.width: 1
 
                 ColumnLayout {
@@ -292,7 +355,7 @@ Item {
                         Layout.fillWidth: true
                         Text {
                             text: "Peers"
-                            color: "#ffffff"
+                            color: theme.text
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
                             Layout.fillWidth: true
@@ -334,9 +397,9 @@ Item {
                         delegate: Rectangle {
                             width: ListView.view.width
                             height: peerCol.implicitHeight + 12
-                            color: "#0d1117"
+                            color: theme.backgroundElevated
                             radius: 4
-                            border.color: "#21262d"
+                            border.color: theme.borderSubtle
                             border.width: 1
 
                             ColumnLayout {
@@ -349,18 +412,18 @@ Item {
 
                                 Text {
                                     text: model.name
-                                    color: "#7ee787"
+                                    color: theme.successSoft
                                     font.pixelSize: 12
                                     font.weight: Font.DemiBold
                                 }
                                 Text {
                                     text: "caps: " + (model.capabilities || []).join(", ")
-                                    color: "#8b949e"
+                                    color: theme.textSecondary
                                     font.pixelSize: 10
                                 }
                                 Text {
                                     text: root.shorten(model.agent_id || "", 32)
-                                    color: "#6e7681"
+                                    color: theme.textMuted
                                     font.pixelSize: 10
                                     font.family: "monospace"
                                 }
@@ -371,7 +434,7 @@ Item {
                     Text {
                         visible: peersModel.count === 0
                         text: "No live peers yet — try a filter or refresh."
-                        color: "#6e7681"
+                        color: theme.textMuted
                         font.pixelSize: 11
                         font.italic: true
                         Layout.alignment: Qt.AlignHCenter
@@ -384,9 +447,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 1
-                color: "#161b22"
+                color: theme.backgroundSecondary
                 radius: 6
-                border.color: "#30363d"
+                border.color: theme.border
                 border.width: 1
 
                 ColumnLayout {
@@ -396,7 +459,7 @@ Item {
 
                     Text {
                         text: "Delegate task"
-                        color: "#ffffff"
+                        color: theme.text
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
                     }
@@ -405,7 +468,7 @@ Item {
                         Layout.fillWidth: true
                         Text {
                             text: "Capability"
-                            color: "#8b949e"
+                            color: theme.textSecondary
                             font.pixelSize: 12
                             Layout.preferredWidth: 80
                         }
@@ -418,7 +481,7 @@ Item {
 
                     Text {
                         text: "Task text"
-                        color: "#8b949e"
+                        color: theme.textSecondary
                         font.pixelSize: 12
                     }
                     ScrollView {
@@ -429,8 +492,8 @@ Item {
                             id: delegateText
                             placeholderText: "What do you want a peer to do?"
                             wrapMode: TextArea.Wrap
-                            background: Rectangle { color: "#0d1117"; border.color: "#21262d"; radius: 4 }
-                            color: "#ffffff"
+                            background: Rectangle { color: theme.backgroundElevated; border.color: theme.borderSubtle; radius: 4 }
+                            color: theme.text
                         }
                     }
 
@@ -482,7 +545,7 @@ Item {
                         id: delegateResult
                         Layout.fillWidth: true
                         text: "Result will appear here."
-                        color: "#7ee787"
+                        color: theme.successSoft
                         font.pixelSize: 12
                         wrapMode: Text.Wrap
                     }
@@ -491,7 +554,7 @@ Item {
                         Layout.fillWidth: true
                         text: ""
                         visible: text.length > 0
-                        color: "#79c0ff"
+                        color: theme.info
                         font.pixelSize: 10
                         font.family: "monospace"
                         wrapMode: Text.Wrap
@@ -509,9 +572,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 260
-            color: "#161b22"
+            color: theme.backgroundSecondary
             radius: 6
-            border.color: "#30363d"
+            border.color: theme.border
             border.width: 1
 
             ColumnLayout {
@@ -551,7 +614,7 @@ Item {
 
                     Text {
                         text: "Friend-keyring trust list"
-                        color: "#ffffff"
+                        color: theme.text
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
                         Layout.fillWidth: true
@@ -559,7 +622,7 @@ Item {
 
                     Text {
                         text: "Mode:"
-                        color: "#8b949e"
+                        color: theme.textSecondary
                         font.pixelSize: 12
                     }
                     ComboBox {
@@ -590,7 +653,7 @@ Item {
                 Text {
                     visible: trustCol.trustFile.length > 0
                     text: "trust file: " + trustCol.trustFile
-                    color: "#6e7681"
+                    color: theme.textMuted
                     font.pixelSize: 10
                     font.family: "monospace"
                     Layout.fillWidth: true
@@ -651,9 +714,9 @@ Item {
                     delegate: Rectangle {
                         width: ListView.view.width
                         height: 38
-                        color: "#0d1117"
+                        color: theme.backgroundElevated
                         radius: 4
-                        border.color: "#21262d"
+                        border.color: theme.borderSubtle
                         border.width: 1
 
                         RowLayout {
@@ -663,7 +726,7 @@ Item {
 
                             Text {
                                 text: model.nickname
-                                color: "#7ee787"
+                                color: theme.successSoft
                                 font.pixelSize: 12
                                 font.weight: Font.DemiBold
                                 Layout.preferredWidth: 100
@@ -671,7 +734,7 @@ Item {
                             }
                             Text {
                                 text: root.shorten(model.pubkey, 18)
-                                color: "#6e7681"
+                                color: theme.textMuted
                                 font.pixelSize: 10
                                 font.family: "monospace"
                                 Layout.preferredWidth: 160
@@ -681,7 +744,7 @@ Item {
                                       ((model.capabilities && model.capabilities.length > 0)
                                           ? Array.from(model.capabilities).join(", ")
                                           : "(any)")
-                                color: "#8b949e"
+                                color: theme.textSecondary
                                 font.pixelSize: 10
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
@@ -708,7 +771,7 @@ Item {
                     text: trustCol.trustMode === "off"
                           ? "Trust mode is OFF — every peer is accepted. Add an entry to enable filtering."
                           : "No trusted peers yet — add one above."
-                    color: "#6e7681"
+                    color: theme.textMuted
                     font.pixelSize: 11
                     font.italic: true
                     Layout.alignment: Qt.AlignHCenter
@@ -717,7 +780,7 @@ Item {
                 Text {
                     visible: trustCol.trustError.length > 0
                     text: "Error: " + trustCol.trustError
-                    color: "#f85149"
+                    color: theme.error
                     font.pixelSize: 11
                 }
             }
@@ -727,9 +790,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 130
-            color: "#161b22"
+            color: theme.backgroundSecondary
             radius: 6
-            border.color: "#30363d"
+            border.color: theme.border
             border.width: 1
 
             ColumnLayout {
@@ -742,7 +805,7 @@ Item {
 
                     Text {
                         text: "Audit log fetch"
-                        color: "#ffffff"
+                        color: theme.text
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
                         Layout.fillWidth: true
@@ -783,8 +846,8 @@ Item {
                         readOnly: true
                         placeholderText: "Fetched payload appears here."
                         wrapMode: TextArea.Wrap
-                        background: Rectangle { color: "#0d1117"; border.color: "#21262d"; radius: 4 }
-                        color: "#ffffff"
+                        background: Rectangle { color: theme.backgroundElevated; border.color: theme.borderSubtle; radius: 4 }
+                        color: theme.text
                         font.family: "monospace"
                         font.pixelSize: 11
                     }
