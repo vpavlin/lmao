@@ -59,8 +59,9 @@ public:
     /// The QML side starts the call, then listens via
     /// `Connections { target: logos; function onModuleEventReceived(...) }`
     /// to render results without blocking the UI thread.
-    std::string start_delegate(const std::string& capability,
-                               const std::string& text);
+    /// (Single-line signature — the universal-module C++ parser
+    /// silently skips multi-line method declarations.)
+    std::string start_delegate(const std::string& capability, const std::string& text);
 
     /// Send a task directly to a known recipient pubkey.
     std::string send_task(const std::string& recipient_pubkey, const std::string& text);

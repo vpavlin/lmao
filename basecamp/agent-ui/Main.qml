@@ -989,16 +989,31 @@ Item {
                     // delegate_complete handler flips status + fills
                     // body/cid in place. Multiple cards can be
                     // running at once.
-                    ListView {
-                        id: tasksList
+                    // Wrap the ListView in a sized container so the
+                    // surrounding ColumnLayout gives it a bounded
+                    // height. A bare `Layout.fillHeight: true` on a
+                    // ListView inside a ColumnLayout sometimes lets
+                    // the implicit content height override the
+                    // available space, and the cards spill off the
+                    // visible area instead of scrolling.
+                    Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.minimumHeight: 120
+                        color: "transparent"
+
+                    ListView {
+                        id: tasksList
+                        anchors.fill: parent
                         clip: true
                         spacing: 8
                         model: tasksModel
                         boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        cacheBuffer: 200
+                        ScrollBar.vertical: ScrollBar {
+                            policy: ScrollBar.AsNeeded
+                            active: true
+                        }
 
                         delegate: Rectangle {
                             id: taskCard
@@ -1029,47 +1044,43 @@ Item {
                                     Layout.fillWidth: true
                                     spacing: 8
 
-                                    Rectangle {
-                                        // status pill
-                                        radius: 3
-                                        color: status === "running"
-                                            ? Qt.rgba(0.94, 0.53, 0.24, 0.15)
-                                          : status === "error"
-                                            ? Qt.rgba(0.97, 0.32, 0.29, 0.15)
-                                          : Qt.rgba(0.34, 0.83, 0.39, 0.15)
-                                        border.color: status === "running" ? theme.primary
-                                            : status === "error" ? theme.error
-                                            : theme.success
-                                        border.width: 1
-                                        implicitWidth: statusLabel.implicitWidth + 14
-                                        implicitHeight: statusLabel.implicitHeight + 4
-                                        Row {
+                                    // Status indicator. Running: pulsing
+                                    // dot only (no pill — would compete
+                                    // with the capability pill next to
+                                    // it). Done: ✓ glyph in success
+                                    // colour. Error: ✗ glyph in error
+                                    // colour. Clean and quiet.
+                                    Item {
+                                        implicitWidth: 14
+                                        implicitHeight: 14
+                                        Rectangle {
+                                            visible: status === "running"
                                             anchors.centerIn: parent
-                                            spacing: 4
-                                            Rectangle {
-                                                width: 6; height: 6; radius: 3
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                color: status === "running" ? theme.primary
-                                                    : status === "error" ? theme.error
-                                                    : theme.success
-                                                SequentialAnimation on opacity {
-                                                    running: status === "running"
-                                                    loops: Animation.Infinite
-                                                    NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
-                                                    NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
-                                                    onRunningChanged: if (!running) parent.opacity = 1.0
-                                                }
+                                            width: 8; height: 8; radius: 4
+                                            color: theme.primary
+                                            SequentialAnimation on opacity {
+                                                running: status === "running"
+                                                loops: Animation.Infinite
+                                                NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
+                                                NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
+                                                onRunningChanged: if (!running) parent.opacity = 1.0
                                             }
-                                            Text {
-                                                id: statusLabel
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                text: status
-                                                color: status === "running" ? theme.primary
-                                                    : status === "error" ? theme.error
-                                                    : theme.success
-                                                font.pixelSize: 10
-                                                font.weight: Font.Medium
-                                            }
+                                        }
+                                        Text {
+                                            visible: status === "done"
+                                            anchors.centerIn: parent
+                                            text: "✓"
+                                            color: theme.success
+                                            font.pixelSize: 14
+                                            font.weight: Font.Bold
+                                        }
+                                        Text {
+                                            visible: status === "error"
+                                            anchors.centerIn: parent
+                                            text: "✕"
+                                            color: theme.error
+                                            font.pixelSize: 13
+                                            font.weight: Font.Bold
                                         }
                                     }
                                     Rectangle {
@@ -1267,7 +1278,8 @@ Item {
                             font.pixelSize: 11
                             font.italic: true
                         }
-                    }
+                    } // end ListView
+                    } // end ListView wrapper Rectangle
                 }
             }
         }
