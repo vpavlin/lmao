@@ -517,7 +517,7 @@ Item {
                 contentItem: Text {
                     text: tab.text
                     color: tab.checked ? theme.text : theme.textSecondary
-                    font: tab.font
+                    font.pixelSize: tab.font.pixelSize
                     font.weight: tab.checked ? Font.Medium : Font.Normal
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
