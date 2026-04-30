@@ -126,6 +126,7 @@ pub async fn handle(
     storage: Option<Arc<dyn StorageBackend>>,
     daemon_socket: Option<PathBuf>,
     identity: &IdentityConfig,
+    trust_file: Option<PathBuf>,
     json: bool,
 ) -> Result<()> {
     match action {
@@ -135,13 +136,16 @@ pub async fn handle(
             exec,
         } => {
             let caps = parse_capabilities(&capabilities);
-            let node = Arc::new(build_node(
-                &name,
-                &format!("{} agent", name),
-                caps,
-                transport,
-                identity,
-            )?);
+            let trust_path =
+                trust_file.unwrap_or_else(logos_messaging_a2a_core::TrustList::default_path);
+            let trust_list = logos_messaging_a2a_core::TrustList::load_from(&trust_path)
+                .with_context(|| format!("loading trust file {}", trust_path.display()))?;
+            let trust_mode = trust_list.mode();
+            let trust_count = trust_list.len();
+            let node = Arc::new(
+                build_node(&name, &format!("{} agent", name), caps, transport, identity)?
+                    .with_trust_list(Arc::new(trust_list)),
+            );
 
             if json {
                 let mut info = serde_json::json!({
@@ -149,6 +153,11 @@ pub async fn handle(
                     "name": node.card.name,
                     "pubkey": node.pubkey(),
                     "capabilities": node.card.capabilities,
+                    "trust": {
+                        "mode": trust_mode,
+                        "entries": trust_count,
+                        "file": trust_path.display().to_string(),
+                    },
                 });
                 if identity.encrypt {
                     if let Some(ref bundle) = node.card.intro_bundle {
@@ -169,6 +178,10 @@ pub async fn handle(
                 println!("Agent: {}", node.card.name);
                 println!("Pubkey: {}", node.pubkey());
                 println!("Capabilities: {}", node.card.capabilities.join(", "));
+                println!(
+                    "Trust: {trust_mode:?} ({trust_count} entries from {})",
+                    trust_path.display()
+                );
                 if identity.encrypt {
                     if let Some(ref bundle) = node.card.intro_bundle {
                         println!("Encryption: ENABLED (X25519+ChaCha20-Poly1305)");

@@ -66,6 +66,7 @@ mod tests {
             retry_attempts: 13,
             retries_exhausted: 14,
             responses_sent: 16,
+            tasks_dropped_untrusted: 17,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -94,10 +95,11 @@ mod tests {
             retry_attempts: 0,
             retries_exhausted: 0,
             responses_sent: 0,
+            tasks_dropped_untrusted: 0,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        // Verify all 17 fields are present
-        assert!(parsed.as_object().unwrap().len() == 17);
+        // Verify all 18 fields are present
+        assert!(parsed.as_object().unwrap().len() == 18);
     }
 }

@@ -93,6 +93,14 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, global = true)]
     pub storage_port: u16,
 
+    /// Path to the trust list TOML file. `agent run` loads it on
+    /// startup; the `lmao trust` subcommands read/write it. Defaults to
+    /// `$XDG_CONFIG_HOME/lmao/trust.toml`. A missing file is treated as
+    /// `TrustMode::Off` (no filtering — same behaviour as before the
+    /// trust list existed).
+    #[arg(long, global = true)]
+    pub trust_file: Option<PathBuf>,
+
     /// Path to the daemon's Unix-domain socket. `agent run` binds it;
     /// other commands probe it and forward over IPC if a daemon is
     /// listening, otherwise spin up a short-lived node themselves.
@@ -162,6 +170,50 @@ pub enum Commands {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Manage the friend-keyring trust list (`docs/TRUST.md`).
+    Trust {
+        #[command(subcommand)]
+        action: TrustAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TrustAction {
+    /// List all trusted peers.
+    List,
+    /// Add (or replace) a trusted peer.
+    Add {
+        /// secp256k1 compressed-hex pubkey.
+        pubkey: String,
+        /// Human-readable nickname.
+        #[arg(long)]
+        nickname: String,
+        /// Capability to trust the peer for. Repeat the flag for
+        /// multiple. If omitted, the peer is trusted for any capability.
+        #[arg(long = "cap")]
+        capabilities: Vec<String>,
+        /// Free-form note ("met at ETHPrague 2026", etc.).
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Remove a trusted peer by pubkey *or* nickname.
+    Remove {
+        /// Pubkey hex or nickname.
+        target: String,
+    },
+    /// Show or change the enforcement mode.
+    Mode {
+        /// `off`, `enforce`, or `log`. Omit to print the current mode.
+        new_mode: Option<String>,
+    },
+    /// Merge another trust file (or stdin if `-`) into the local list.
+    /// Existing pubkeys are preserved; only new ones are added.
+    Import {
+        /// Path to a TOML file. `-` reads from stdin.
+        path: String,
+    },
+    /// Print the trust list as TOML on stdout.
+    Export,
 }
 
 #[derive(Debug, Subcommand)]

@@ -59,6 +59,7 @@ use logos_messaging_a2a_core::AgentCard;
 use logos_messaging_a2a_core::RetryConfig;
 /// Re-export of [`logos_messaging_a2a_core::Task`] for convenience.
 pub use logos_messaging_a2a_core::Task as TaskType;
+use logos_messaging_a2a_core::TrustList;
 use logos_messaging_a2a_crypto::{AgentIdentity, IntroBundle};
 use logos_messaging_a2a_transport::sds::{ChannelConfig, MessageChannel};
 use logos_messaging_a2a_transport::Transport;
@@ -128,6 +129,10 @@ pub struct LmaoNode<T: Transport> {
     round_robin_counter: AtomicUsize,
     /// Operational metrics counters.
     metrics: Metrics,
+    /// Friend-keyring filter applied at delegation peer selection and
+    /// incoming-task acceptance. Default = empty list in `TrustMode::Off`,
+    /// which matches pre-trust behaviour: no filtering at all.
+    trust_list: Arc<TrustList>,
 }
 
 impl<T: Transport> LmaoNode<T> {
@@ -173,6 +178,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
+            trust_list: Arc::new(TrustList::empty()),
         }
     }
 
@@ -226,6 +232,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
+            trust_list: Arc::new(TrustList::empty()),
         }
     }
 
@@ -276,6 +283,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
+            trust_list: Arc::new(TrustList::empty()),
         }
     }
 
@@ -410,6 +418,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
+            trust_list: Arc::new(TrustList::empty()),
         }
     }
 
@@ -449,6 +458,25 @@ impl<T: Transport> LmaoNode<T> {
     pub fn with_registry(mut self, registry: Arc<dyn AgentRegistry>) -> Self {
         self.registry = Some(registry);
         self
+    }
+
+    /// Attach a friend-keyring trust list. The list is consulted at two
+    /// points: outgoing delegation (peer selection filters to trusted
+    /// peers) and incoming task acceptance (untrusted senders are dropped
+    /// in `TrustMode::Enforce`, surfaced-with-warning in `TrustMode::Log`).
+    ///
+    /// When the list is in `TrustMode::Off` (the default for unconfigured
+    /// nodes) both filters are no-ops and behaviour is identical to a
+    /// node without a trust list.
+    pub fn with_trust_list(mut self, list: Arc<TrustList>) -> Self {
+        self.trust_list = list;
+        self
+    }
+
+    /// Read-only access to the configured trust list. Returns the empty
+    /// `Off`-mode list if `with_trust_list` was never called.
+    pub fn trust_list(&self) -> &TrustList {
+        &self.trust_list
     }
 
     /// Get this agent's public key hex string.

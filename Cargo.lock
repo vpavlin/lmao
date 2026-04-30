@@ -2150,8 +2150,10 @@ dependencies = [
  "logos-messaging-a2a-crypto",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
+ "toml",
  "uuid",
 ]
 

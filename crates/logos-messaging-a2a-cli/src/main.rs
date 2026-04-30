@@ -11,6 +11,7 @@ mod presence;
 mod session;
 mod storage;
 mod task;
+mod trust;
 
 use anyhow::Result;
 use clap::Parser;
@@ -50,6 +51,10 @@ async fn main() -> Result<()> {
     if let Commands::Daemon { action } = cli.command {
         return daemon_cmd::handle(action, daemon_socket.as_ref(), cli.json).await;
     }
+    // Trust list commands are pure file IO — no transport, no daemon.
+    if let Commands::Trust { action } = cli.command {
+        return trust::handle(action, cli.trust_file, cli.json).await;
+    }
 
     // Daemon-aware commands (task / presence / agent discover) probe
     // the daemon socket first and short-circuit there. If a daemon is
@@ -86,7 +91,16 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Agent { action } => {
-            agent::handle(action, transport, storage, daemon_socket, &identity, json).await
+            agent::handle(
+                action,
+                transport,
+                storage,
+                daemon_socket,
+                &identity,
+                cli.trust_file,
+                json,
+            )
+            .await
         }
         Commands::Task { action } => {
             task::handle(action, transport, daemon_socket.as_ref(), &identity, json).await
@@ -104,6 +118,7 @@ async fn main() -> Result<()> {
         Commands::Info => unreachable!("handled above"),
         Commands::Storage { .. } => unreachable!("handled above"),
         Commands::Daemon { .. } => unreachable!("handled above"),
+        Commands::Trust { .. } => unreachable!("handled above"),
     }
 }
 

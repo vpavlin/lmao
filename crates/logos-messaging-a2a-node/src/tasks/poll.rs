@@ -1,4 +1,4 @@
-use logos_messaging_a2a_core::{A2AEnvelope, Task};
+use logos_messaging_a2a_core::{A2AEnvelope, Task, TrustMode};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
@@ -50,7 +50,9 @@ impl<T: Transport> LmaoNode<T> {
                     let _ = self.channel.send_ack("", &content.message_id).await;
 
                     if let Some(task) = self.extract_task(&content.content).await? {
-                        tasks.push(task);
+                        if self.accept_or_drop(&task) {
+                            tasks.push(task);
+                        }
                     }
                 }
             } else {
@@ -64,7 +66,9 @@ impl<T: Transport> LmaoNode<T> {
                     self.channel.bloom.set(&dedup_id);
 
                     if let Some(task) = self.extract_task_from_envelope(envelope).await? {
-                        tasks.push(task);
+                        if self.accept_or_drop(&task) {
+                            tasks.push(task);
+                        }
                     }
                 }
             }
@@ -128,6 +132,42 @@ impl<T: Transport> LmaoNode<T> {
                 }
             }
             _ => Ok(None),
+        }
+    }
+
+    /// Apply the trust list to an incoming task. Returns `true` if the
+    /// task should be surfaced to the caller, `false` if it should be
+    /// dropped.
+    ///
+    /// - `TrustMode::Off`: always accept (`is_trusted` returns true).
+    /// - `TrustMode::Enforce`: drop untrusted senders silently, bump
+    ///   the `tasks_dropped_untrusted` counter.
+    /// - `TrustMode::Log`: log a warning but still accept; bumps the
+    ///   counter for visibility.
+    fn accept_or_drop(&self, task: &Task) -> bool {
+        let trust = self.trust_list();
+        if trust.is_trusted(&task.from) {
+            return true;
+        }
+        Metrics::inc(&self.metrics.tasks_dropped_untrusted);
+        match trust.mode() {
+            TrustMode::Off => true, // unreachable: is_trusted is always true in Off
+            TrustMode::Enforce => {
+                tracing::debug!(
+                    sender = %task.from,
+                    task_id = %task.id,
+                    "dropping task from untrusted sender"
+                );
+                false
+            }
+            TrustMode::Log => {
+                tracing::warn!(
+                    sender = %task.from,
+                    task_id = %task.id,
+                    "accepting task from untrusted sender (TrustMode::Log)"
+                );
+                true
+            }
         }
     }
 

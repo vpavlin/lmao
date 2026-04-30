@@ -49,6 +49,10 @@ pub struct Metrics {
     pub retries_exhausted: AtomicU64,
     /// Responses sent (via `respond` / `respond_to`).
     pub responses_sent: AtomicU64,
+    /// Incoming tasks dropped because the sender wasn't in the trust
+    /// list (or wasn't trusted for the task's session capability).
+    /// Always zero in `TrustMode::Off`.
+    pub tasks_dropped_untrusted: AtomicU64,
 }
 
 impl Metrics {
@@ -72,6 +76,7 @@ impl Metrics {
             retry_attempts: AtomicU64::new(0),
             retries_exhausted: AtomicU64::new(0),
             responses_sent: AtomicU64::new(0),
+            tasks_dropped_untrusted: AtomicU64::new(0),
         }
     }
 
@@ -107,6 +112,7 @@ impl Metrics {
             retry_attempts: self.retry_attempts.load(Ordering::Relaxed),
             retries_exhausted: self.retries_exhausted.load(Ordering::Relaxed),
             responses_sent: self.responses_sent.load(Ordering::Relaxed),
+            tasks_dropped_untrusted: self.tasks_dropped_untrusted.load(Ordering::Relaxed),
         }
     }
 }
@@ -137,6 +143,7 @@ pub struct MetricsSnapshot {
     pub retry_attempts: u64,
     pub retries_exhausted: u64,
     pub responses_sent: u64,
+    pub tasks_dropped_untrusted: u64,
 }
 
 #[cfg(test)]

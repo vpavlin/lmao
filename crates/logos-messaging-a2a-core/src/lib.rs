@@ -30,6 +30,9 @@ pub mod retry;
 /// Task lifecycle types and message parts.
 pub mod task;
 pub mod topics;
+/// Friend-keyring trust list — local pubkey allow-list with two filter
+/// points (outgoing delegation, incoming task acceptance).
+pub mod trust;
 
 // Re-export everything at crate root so existing imports don't break.
 pub use agent::*;
@@ -38,3 +41,4 @@ pub use envelope::*;
 pub use presence::*;
 pub use retry::*;
 pub use task::*;
+pub use trust::{TrustEntry, TrustError, TrustList, TrustMode};
