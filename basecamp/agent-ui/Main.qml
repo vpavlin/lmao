@@ -13,52 +13,54 @@ import QtQuick.Layouts
 //   4. Trust      — friend-keyring management (mode, list, add/remove)
 //   5. Audit      — paste a codex:// CID, fetch the bytes
 //
-// Visual tokens (`theme`) mirror the Logos Design System palette + spacing
-// (logos-co/logos-design-system, src/qml/theme/{ColorPalette,DarkTheme,
-// Spacing}.qml) — kept inline here because mkLogosQmlModule has no hook
-// to bundle the upstream Logos.Theme module into a ui_qml plugin's QML
-// import path. When LMAO is published to the upstream catalog and gets
-// picked up by a richer build pipeline, swap this for `import Logos.Theme`
-// + `readonly property var theme: Theme` and the rest of the UI is
-// already token-driven.
+// Visual tokens (`theme`) — token-driven palette so the colors live in
+// one place and a future swap to the upstream Logos.Theme module is a
+// few-line change. The values themselves intentionally diverge from
+// Logos.Theme's gray850/gray900 base: those tokens are designed against
+// Logos.Controls' surfaces and gradients, and look muddy when applied
+// directly to a flat plugin pane against Basecamp's light app chrome.
+// Spacing + typography scales follow Logos.Spacing.
 Item {
     id: root
 
-    // ── Logos Design System tokens (inline mirror) ───────────────
+    // ── Visual tokens ────────────────────────────────────────────
     QtObject {
         id: theme
 
-        // Backgrounds
-        readonly property color background:        "#171717"  // gray900
-        readonly property color backgroundElevated: "#0E121B"  // gray950 — header, inputs
-        readonly property color backgroundSecondary: "#262626" // gray850 — panes
-        readonly property color backgroundInset:    "#141414"  // gray925 — list rows
+        // Backgrounds — the original GitHub-inspired dark palette.
+        // High contrast against Basecamp's light app chrome; reads
+        // crisp at the panel borders.
+        readonly property color background:         "#0d1117"
+        readonly property color backgroundElevated: "#0d1117"  // header, inputs
+        readonly property color backgroundSecondary: "#161b22" // panes
+        readonly property color backgroundInset:    "#0d1117"  // list rows
 
         // Text
-        readonly property color text:          "#FFFFFF"
-        readonly property color textSecondary: "#A4A4A4"  // gray400
-        readonly property color textTertiary:  "#969696"  // gray500
-        readonly property color textMuted:     "#5C5C5C"  // gray700
+        readonly property color text:          "#ffffff"
+        readonly property color textSecondary: "#8b949e"
+        readonly property color textTertiary:  "#7d8590"
+        readonly property color textMuted:     "#6e7681"
 
         // Borders
-        readonly property color border:        "#434343"  // gray300
-        readonly property color borderSubtle:  "#333333"  // gray330
-        readonly property color borderDark:    "#2F2F2F"  // gray340
+        readonly property color border:        "#30363d"
+        readonly property color borderSubtle:  "#21262d"
+        readonly property color borderDark:    "#21262d"
 
-        // Status / accents
-        readonly property color success:    "#49F563"  // green500
-        readonly property color successSoft:"#6CCC93"  // green400 — pubkey hex
-        readonly property color warning:    "#FEBC2E"  // yellow400
-        readonly property color error:      "#FB3748"  // red500
-        readonly property color info:       "#4A90E2"  // blue400 — codex link
-        readonly property color primary:    "#ED7B58"  // orange300 — Logos accent
+        // Status / accents — vivid where they need to be readable
+        // against the dark panes.
+        readonly property color success:    "#56d364"
+        readonly property color successSoft:"#7ee787"   // pubkey hex
+        readonly property color warning:    "#f0883e"   // "starting" badge
+        readonly property color error:      "#f85149"
+        readonly property color info:       "#79c0ff"   // codex link
+        readonly property color primary:    "#ED7B58"   // orange300 — Logos accent
 
         // Tints for status badges (low-alpha background washes)
-        readonly property color tintSuccess: Qt.rgba(0.286, 0.961, 0.388, 0.15)
-        readonly property color tintWarning: Qt.rgba(0.996, 0.737, 0.180, 0.15)
-        readonly property color tintError:   Qt.rgba(0.984, 0.216, 0.282, 0.15)
+        readonly property color tintSuccess: "#1a3f2e"
+        readonly property color tintWarning: "#3a2d10"
+        readonly property color tintError:   "#572421"
 
-        // Spacing scale
+        // Spacing scale (Logos.Spacing-aligned)
         readonly property int spaceTiny:   4
         readonly property int spaceSmall:  8
         readonly property int spaceMedium: 12
