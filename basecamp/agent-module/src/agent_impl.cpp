@@ -114,6 +114,34 @@ AgentImpl::AgentImpl() : m_state(new State) {
     m_state->process.setProgram(m_state->lmaoBinary);
     m_state->process.setArguments(args);
     m_state->process.setProcessChannelMode(QProcess::ForwardedChannels);
+
+    // Ensure the spawned `lmao agent run` can find liblogosdelivery.so.
+    // Logos Basecamp launches its `logos_host` subprocesses with a
+    // scrubbed/replaced environment (Nix-style PATH munging, LD path
+    // overrides), so LD_LIBRARY_PATH set in the user's launch shell
+    // doesn't reach us here. We re-prepend $LIBLOGOSDELIVERY_LIB_DIR
+    // (also commonly set in the launch shell, and *that* usually does
+    // survive) to whatever LD_LIBRARY_PATH the child would otherwise
+    // inherit, and pass an explicit env to QProcess so the override
+    // sticks.
+    {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        const QString libDir = qEnvironmentVariable("LIBLOGOSDELIVERY_LIB_DIR");
+        if (!libDir.isEmpty()) {
+            const QString existing = env.value("LD_LIBRARY_PATH");
+            const QString updated = existing.isEmpty()
+                ? libDir
+                : libDir + ":" + existing;
+            env.insert("LD_LIBRARY_PATH", updated);
+        } else {
+            qWarning().noquote()
+                << "AgentImpl: LIBLOGOSDELIVERY_LIB_DIR not set in environment;"
+                << "the spawned `lmao agent run` will likely fail to load"
+                << "liblogosdelivery.so. Export it before launching Basecamp.";
+        }
+        m_state->process.setProcessEnvironment(env);
+    }
+
     m_state->process.start();
 
     if (!m_state->process.waitForStarted(5'000)) {
