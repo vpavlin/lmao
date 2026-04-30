@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // LMAO agent UI — talks to the `agent` core module which proxies a
@@ -22,6 +22,13 @@ import QtQuick.Layouts
 // Spacing + typography scales follow Logos.Spacing.
 Item {
     id: root
+
+    // Solid dark background — covers Basecamp's light app chrome that
+    // otherwise bleeds through and makes everything look out of place.
+    Rectangle {
+        anchors.fill: parent
+        color: "#0d1117"
+    }
 
     // ── Visual tokens ────────────────────────────────────────────
     QtObject {
@@ -77,6 +84,161 @@ Item {
         readonly property int fontBody:   12
         readonly property int fontMedium: 14
         readonly property int fontLarge:  18
+
+        // Standard control height — keeps TextFields, Buttons, and
+        // ComboBoxes vertically aligned on the same row.
+        readonly property int controlHeight: 32
+    }
+
+    // ── Styled controls ─────────────────────────────────────────
+    // Inline component definitions (Qt 6.3+) so we get rounded,
+    // dark, theme-aware buttons / inputs / combos throughout without
+    // a separate file per control. QtQuick.Controls.Basic is the
+    // designable style — Material/Fusion defaults resist override.
+
+    component DarkButton: Button {
+        id: db
+        height: theme.controlHeight
+        padding: theme.spaceMedium
+        font.pixelSize: theme.fontBody
+        hoverEnabled: true
+
+        background: Rectangle {
+            radius: theme.radiusMedium
+            color: !db.enabled ? Qt.rgba(0, 0, 0, 0.25)
+                  : db.down    ? theme.borderDark
+                  : db.hovered ? Qt.darker(theme.backgroundSecondary, 0.85)
+                               : theme.backgroundElevated
+            border.color: db.down || db.hovered ? theme.primary : theme.border
+            border.width: 1
+        }
+        contentItem: Text {
+            text: db.text
+            color: db.enabled ? theme.text : theme.textMuted
+            font: db.font
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+    }
+
+    component DarkPrimaryButton: Button {
+        id: dpb
+        height: theme.controlHeight
+        padding: theme.spaceMedium
+        font.pixelSize: theme.fontBody
+        font.weight: Font.Medium
+        hoverEnabled: true
+
+        background: Rectangle {
+            radius: theme.radiusMedium
+            color: !dpb.enabled ? Qt.rgba(0, 0, 0, 0.25)
+                  : dpb.down    ? Qt.darker(theme.primary, 1.3)
+                  : dpb.hovered ? Qt.lighter(theme.primary, 1.1)
+                                : theme.primary
+            border.width: 0
+        }
+        contentItem: Text {
+            text: dpb.text
+            color: dpb.enabled ? "#ffffff" : theme.textMuted
+            font: dpb.font
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+    }
+
+    component DarkTextField: TextField {
+        id: dtf
+        height: theme.controlHeight
+        font.pixelSize: theme.fontBody
+        color: theme.text
+        placeholderTextColor: theme.textMuted
+        selectionColor: theme.primary
+        selectedTextColor: theme.text
+        leftPadding: theme.spaceSmall + 2
+        rightPadding: theme.spaceSmall + 2
+        verticalAlignment: TextInput.AlignVCenter
+
+        background: Rectangle {
+            radius: theme.radiusMedium
+            color: theme.backgroundElevated
+            border.color: dtf.activeFocus ? theme.primary : theme.border
+            border.width: 1
+        }
+    }
+
+    component DarkComboBox: ComboBox {
+        id: dcb
+        height: theme.controlHeight
+        font.pixelSize: theme.fontBody
+
+        background: Rectangle {
+            radius: theme.radiusMedium
+            color: dcb.pressed ? theme.borderDark : theme.backgroundElevated
+            border.color: dcb.activeFocus || dcb.pressed ? theme.primary : theme.border
+            border.width: 1
+        }
+        contentItem: Text {
+            text: dcb.displayText
+            color: theme.text
+            font: dcb.font
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: theme.spaceSmall + 2
+            elide: Text.ElideRight
+        }
+        indicator: Canvas {
+            id: caret
+            width: 10; height: 6
+            anchors.right: parent.right
+            anchors.rightMargin: theme.spaceSmall
+            anchors.verticalCenter: parent.verticalCenter
+            contextType: "2d"
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.reset();
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(width, 0);
+                ctx.lineTo(width / 2, height);
+                ctx.closePath();
+                ctx.fillStyle = theme.textSecondary;
+                ctx.fill();
+            }
+        }
+        popup: Popup {
+            y: dcb.height + 2
+            width: dcb.width
+            implicitHeight: Math.min(contentItem.implicitHeight + 8, 240)
+            padding: 4
+            background: Rectangle {
+                color: theme.backgroundSecondary
+                border.color: theme.border
+                radius: theme.radiusMedium
+            }
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: dcb.popup.visible ? dcb.delegateModel : null
+                currentIndex: dcb.highlightedIndex
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            }
+        }
+        delegate: ItemDelegate {
+            width: dcb.width - 8
+            height: 28
+            highlighted: dcb.highlightedIndex === index
+            contentItem: Text {
+                text: modelData
+                color: theme.text
+                font: dcb.font
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle {
+                color: highlighted ? theme.borderDark : "transparent"
+                radius: theme.radiusSmall
+            }
+        }
     }
 
 
@@ -362,12 +524,12 @@ Item {
                             font.weight: Font.DemiBold
                             Layout.fillWidth: true
                         }
-                        TextField {
+                        DarkTextField {
                             id: peersFilter
                             placeholderText: "filter capability"
                             Layout.preferredWidth: 140
                         }
-                        Button {
+                        DarkButton {
                             text: "Refresh"
                             onClicked: peersList.refresh()
                         }
@@ -474,7 +636,7 @@ Item {
                             font.pixelSize: 12
                             Layout.preferredWidth: 80
                         }
-                        TextField {
+                        DarkTextField {
                             id: delegateCap
                             Layout.fillWidth: true
                             placeholderText: "e.g. code, summarize, text"
@@ -486,20 +648,35 @@ Item {
                         color: theme.textSecondary
                         font.pixelSize: 12
                     }
-                    ScrollView {
+                    Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 80
+                        color: theme.backgroundElevated
+                        border.color: theme.border
+                        border.width: 1
+                        radius: theme.radiusMedium
 
-                        TextArea {
-                            id: delegateText
-                            placeholderText: "What do you want a peer to do?"
-                            wrapMode: TextArea.Wrap
-                            background: Rectangle { color: theme.backgroundElevated; border.color: theme.borderSubtle; radius: 4 }
-                            color: theme.text
+                        ScrollView {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            clip: true
+
+                            TextArea {
+                                id: delegateText
+                                placeholderText: "What do you want a peer to do?"
+                                placeholderTextColor: theme.textMuted
+                                wrapMode: TextArea.Wrap
+                                color: theme.text
+                                font.pixelSize: theme.fontBody
+                                selectionColor: theme.primary
+                                selectedTextColor: theme.text
+                                background: Item {}
+                                padding: theme.spaceSmall
+                            }
                         }
                     }
 
-                    Button {
+                    DarkPrimaryButton {
                         text: delegateBusy ? "Delegating…" : "Delegate"
                         enabled: !delegateBusy && delegateCap.text.length > 0
                                  && delegateText.text.length > 0
@@ -627,7 +804,7 @@ Item {
                         color: theme.textSecondary
                         font.pixelSize: 12
                     }
-                    ComboBox {
+                    DarkComboBox {
                         id: modeBox
                         Layout.preferredWidth: 110
                         model: ["off", "enforce", "log"]
@@ -646,7 +823,7 @@ Item {
                         }
                     }
 
-                    Button {
+                    DarkButton {
                         text: "Refresh"
                         onClicked: trustCol.refreshTrust()
                     }
@@ -666,22 +843,22 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
 
-                    TextField {
+                    DarkTextField {
                         id: addPubkey
                         placeholderText: "pubkey (hex)"
                         Layout.fillWidth: true
                     }
-                    TextField {
+                    DarkTextField {
                         id: addNickname
                         placeholderText: "nickname"
                         Layout.preferredWidth: 110
                     }
-                    TextField {
+                    DarkTextField {
                         id: addCaps
                         placeholderText: "caps (comma-sep, blank=any)"
                         Layout.preferredWidth: 200
                     }
-                    Button {
+                    DarkPrimaryButton {
                         text: "Add"
                         enabled: addPubkey.text.length > 0 && addNickname.text.length > 0
                         onClicked: {
@@ -751,7 +928,7 @@ Item {
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
-                            Button {
+                            DarkButton {
                                 text: "Remove"
                                 onClicked: {
                                     const raw = logos.callModule("agent", "trust_remove",
@@ -812,12 +989,12 @@ Item {
                         font.weight: Font.DemiBold
                         Layout.fillWidth: true
                     }
-                    TextField {
+                    DarkTextField {
                         id: cidInput
                         placeholderText: "codex://CID (paste here)"
                         Layout.fillWidth: true
                     }
-                    Button {
+                    DarkPrimaryButton {
                         text: "Fetch"
                         enabled: cidInput.text.length > 0
                         onClicked: {
@@ -840,18 +1017,32 @@ Item {
                     }
                 }
 
-                ScrollView {
+                Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    TextArea {
-                        id: cidOut
-                        readOnly: true
-                        placeholderText: "Fetched payload appears here."
-                        wrapMode: TextArea.Wrap
-                        background: Rectangle { color: theme.backgroundElevated; border.color: theme.borderSubtle; radius: 4 }
-                        color: theme.text
-                        font.family: "monospace"
-                        font.pixelSize: 11
+                    color: theme.backgroundElevated
+                    border.color: theme.border
+                    border.width: 1
+                    radius: theme.radiusMedium
+
+                    ScrollView {
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        clip: true
+                        TextArea {
+                            id: cidOut
+                            readOnly: true
+                            placeholderText: "Fetched payload appears here."
+                            placeholderTextColor: theme.textMuted
+                            wrapMode: TextArea.Wrap
+                            color: theme.text
+                            font.family: "monospace"
+                            font.pixelSize: theme.fontSmall
+                            selectionColor: theme.primary
+                            selectedTextColor: theme.text
+                            background: Item {}
+                            padding: theme.spaceSmall
+                        }
                     }
                 }
             }
