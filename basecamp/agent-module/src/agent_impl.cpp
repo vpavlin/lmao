@@ -17,6 +17,7 @@
 #include <QStandardPaths>
 #include <QString>
 
+#include <atomic>
 #include <chrono>
 #include <thread>
 
@@ -73,7 +74,18 @@ struct AgentImpl::State {
     QString lmaoBinary;
     QString socketPath;
     QProcess process;
-    bool started = false;
+    /// Becomes true only when the daemon's IPC socket exists on disk and
+    /// has been given a brief settle window. All Q_INVOKABLE methods
+    /// return an `{"error": "daemon not running"}` response while this
+    /// is false — matching what we did before, but now without blocking
+    /// the host's startup path.
+    std::atomic<bool> started{false};
+    /// Set on destruction so the wait thread exits promptly instead of
+    /// stalling shutdown by 500 ms or so.
+    std::atomic<bool> shuttingDown{false};
+    /// Polls the socket path off the host's main thread. Joined in the
+    /// destructor.
+    std::thread waitThread;
 };
 
 AgentImpl::AgentImpl() : m_state(new State) {
@@ -110,26 +122,43 @@ AgentImpl::AgentImpl() : m_state(new State) {
         return;
     }
 
-    const auto deadline = QDateTime::currentMSecsSinceEpoch() + SOCKET_WAIT_MS;
-    while (QDateTime::currentMSecsSinceEpoch() < deadline) {
-        if (QFileInfo::exists(m_state->socketPath)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(SOCKET_SETTLE_MS));
-            m_state->started = true;
-            qInfo().noquote() << "AgentImpl: daemon up at" << m_state->socketPath;
-            return;
+    // Wait for the daemon's IPC socket to appear on a worker thread so
+    // the constructor returns immediately. Blocking here would freeze
+    // Basecamp's plugin loader for up to 60 s while logos.dev is dialled
+    // — which is exactly what the user saw when clicking the LMAO tab.
+    //
+    // Yolo / whisper-wall / irc-module follow the same pattern: cheap
+    // ctor + initLogos, slow work deferred. IPC methods check `started`
+    // and return an error response until it flips, and the QML side's
+    // 5 s status-refresh timer keeps retrying.
+    const QString socketPath = m_state->socketPath;
+    State* state = m_state;
+    m_state->waitThread = std::thread([state, socketPath]() {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(SOCKET_WAIT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (state->shuttingDown.load(std::memory_order_relaxed)) return;
+            if (QFileInfo::exists(socketPath)) {
+                // Brief settle window — let the daemon finish binding +
+                // subscribing before the first IPC lands.
+                std::this_thread::sleep_for(std::chrono::milliseconds(SOCKET_SETTLE_MS));
+                state->started.store(true, std::memory_order_release);
+                qInfo().noquote() << "AgentImpl: daemon up at" << socketPath;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
-        if (m_state->process.state() != QProcess::Running) {
-            qWarning() << "AgentImpl: daemon exited before socket appeared, code"
-                       << m_state->process.exitCode();
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    qWarning() << "AgentImpl: daemon socket never appeared at" << m_state->socketPath;
+        qWarning() << "AgentImpl: daemon socket never appeared at" << socketPath;
+    });
 }
 
 AgentImpl::~AgentImpl() {
-    if (m_state->started) {
+    // Tell the wait-thread to bail out of its sleep loop; join it before
+    // touching anything else so it can't observe a half-destroyed state.
+    m_state->shuttingDown.store(true, std::memory_order_release);
+    if (m_state->waitThread.joinable()) m_state->waitThread.join();
+
+    if (m_state->started.load(std::memory_order_acquire)) {
         (void)stop_daemon();
         m_state->process.waitForFinished(3'000);
     }
@@ -207,12 +236,12 @@ QString simpleRequest(const QString& socketPath, const QString& kind) {
 } // namespace
 
 std::string AgentImpl::info() {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     return simpleRequest(m_state->socketPath, "info").toStdString();
 }
 
 std::string AgentImpl::peers(const std::string& capability_filter) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "presence_peers";
     req["capability"] = capability_filter.empty()
@@ -223,7 +252,7 @@ std::string AgentImpl::peers(const std::string& capability_filter) {
 
 std::string AgentImpl::delegate(const std::string& capability,
                                 const std::string& text) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "task_delegate";
     req["to"] = QJsonValue::Null;
@@ -239,7 +268,7 @@ std::string AgentImpl::delegate(const std::string& capability,
 
 std::string AgentImpl::send_task(const std::string& recipient_pubkey,
                                  const std::string& text) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "task_send";
     req["to"] = QString::fromStdString(recipient_pubkey);
@@ -248,7 +277,7 @@ std::string AgentImpl::send_task(const std::string& recipient_pubkey,
 }
 
 std::string AgentImpl::fetch_cid(const std::string& cid) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "storage_fetch";
     req["cid"] = QString::fromStdString(cid);
@@ -256,7 +285,7 @@ std::string AgentImpl::fetch_cid(const std::string& cid) {
 }
 
 std::string AgentImpl::trust_list() {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     return simpleRequest(m_state->socketPath, "trust_list").toStdString();
 }
 
@@ -264,7 +293,7 @@ std::string AgentImpl::trust_add(const std::string& pubkey,
                                  const std::string& nickname,
                                  const std::string& capabilities,
                                  const std::string& notes) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "trust_add";
     req["pubkey"] = QString::fromStdString(pubkey);
@@ -282,7 +311,7 @@ std::string AgentImpl::trust_add(const std::string& pubkey,
 }
 
 std::string AgentImpl::trust_remove(const std::string& target) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "trust_remove";
     req["target"] = QString::fromStdString(target);
@@ -290,7 +319,7 @@ std::string AgentImpl::trust_remove(const std::string& target) {
 }
 
 std::string AgentImpl::trust_mode(const std::string& new_mode) {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     QJsonObject req;
     req["kind"] = "trust_mode";
     req["mode"] = new_mode.empty() ? QJsonValue(QJsonValue::Null)
@@ -299,14 +328,14 @@ std::string AgentImpl::trust_mode(const std::string& new_mode) {
 }
 
 std::string AgentImpl::stop_daemon() {
-    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
     auto out = simpleRequest(m_state->socketPath, "shutdown").toStdString();
-    m_state->started = false;
+    m_state->started.store(false, std::memory_order_release);
     return out;
 }
 
 bool AgentImpl::is_running() {
-    return m_state->started
+    return m_state->started.load(std::memory_order_acquire)
         && m_state->process.state() == QProcess::Running
         && QFileInfo::exists(m_state->socketPath);
 }
