@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LMAO mark.
+
+  Three nodes (alice, bob, charlie) on a public mesh. Two solid edges =
+  the friend-keyring trust set. One dashed/missing edge = the untrusted
+  peer that's on the network but won't get picked. The whole point of
+  v1 in one glyph.
+
+  256×256, scales cleanly to 16/32/48/128 px Basecamp icons. Palette
+  matches agent-ui's QML theme: trusted = #7ee787, operator = #79c0ff,
+  untrusted = #6e7681, background = #0d1117.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="LMAO">
+  <title>LMAO</title>
+
+  <!-- Background disc -->
+  <circle cx="128" cy="128" r="128" fill="#0d1117"/>
+  <circle cx="128" cy="128" r="120" fill="none" stroke="#21262d" stroke-width="2"/>
+
+  <!-- Trust edges: alice ↔ bob (solid), alice → charlie (dashed = filtered) -->
+  <g stroke-linecap="round" fill="none">
+    <line x1="92" y1="78"  x2="170" y2="86"  stroke="#7ee787" stroke-width="6"/>
+    <line x1="92" y1="78"  x2="128" y2="190" stroke="#3a4045" stroke-width="4"
+          stroke-dasharray="6 8" opacity="0.7"/>
+    <line x1="170" y1="86" x2="128" y2="190" stroke="#3a4045" stroke-width="4"
+          stroke-dasharray="6 8" opacity="0.7"/>
+  </g>
+
+  <!-- Nodes -->
+  <!-- alice (operator) -->
+  <g>
+    <circle cx="92" cy="78" r="22" fill="#0d1117" stroke="#79c0ff" stroke-width="4"/>
+    <circle cx="92" cy="78" r="10" fill="#79c0ff"/>
+  </g>
+
+  <!-- bob (trusted friend) -->
+  <g>
+    <circle cx="170" cy="86" r="22" fill="#0d1117" stroke="#7ee787" stroke-width="4"/>
+    <circle cx="170" cy="86" r="10" fill="#7ee787"/>
+  </g>
+
+  <!-- charlie (untrusted) -->
+  <g>
+    <circle cx="128" cy="190" r="22" fill="#0d1117" stroke="#6e7681" stroke-width="4"
+            stroke-dasharray="3 4" opacity="0.85"/>
+    <circle cx="128" cy="190" r="6"  fill="#6e7681" opacity="0.6"/>
+  </g>
+</svg>

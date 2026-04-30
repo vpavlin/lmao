@@ -6,7 +6,7 @@
   "type": "ui_qml",
   "category": "agents",
   "view": "Main.qml",
-  "icon": null,
+  "icon": "icon.png",
   "dependencies": [
     "agent"
   ],

@@ -72,50 +72,78 @@ Item {
         spacing: 12
 
         // ── Header ──────────────────────────────────────────────
-        RowLayout {
+        // Wrapped in a dark Rectangle so the title is visible regardless of
+        // the Basecamp host theme — older builds put the chrome on a light
+        // background and white-on-white text vanishes.
+        Rectangle {
             Layout.fillWidth: true
+            Layout.preferredHeight: 56
+            color: "#0d1117"
+            radius: 6
+            border.color: "#30363d"
+            border.width: 1
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 12
 
-                Text {
-                    text: "LMAO Agent"
-                    font.pixelSize: 22
-                    font.weight: Font.DemiBold
-                    color: "#ffffff"
+                Image {
+                    Layout.preferredWidth: 38
+                    Layout.preferredHeight: 38
+                    source: "icon.png"
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    asynchronous: true
+                    // Hide the broken-image glyph if the icon ever fails to
+                    // load (Qt picks the source path relative to the
+                    // installed plugin dir).
+                    onStatusChanged: if (status === Image.Error) visible = false
                 }
-                Text {
-                    text: "A2A coordination over Logos Messaging — local, decentralized, verifiable"
-                    font.pixelSize: 11
-                    color: "#8b949e"
-                }
-            }
 
-            // Status badge
-            Rectangle {
-                Layout.preferredWidth: badge.implicitWidth + 16
-                Layout.preferredHeight: 24
-                radius: 12
-                color: root.statusError ? "#572421" : "#1a3f2e"
-                border.color: root.statusError ? "#f85149" : "#56d364"
-                border.width: 1
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
 
-                Row {
-                    id: badge
-                    anchors.centerIn: parent
-                    spacing: 6
-
-                    Rectangle {
-                        width: 8; height: 8; radius: 4
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: root.statusError ? "#f85149" : "#56d364"
+                    Text {
+                        text: "LMAO Agent"
+                        font.pixelSize: 18
+                        font.weight: Font.DemiBold
+                        color: "#ffffff"
                     }
                     Text {
-                        text: root.statusError ? "daemon offline" : "daemon ready"
-                        color: root.statusError ? "#f85149" : "#56d364"
-                        font.pixelSize: 11
-                        anchors.verticalCenter: parent.verticalCenter
+                        text: "A2A coordination over Logos Messaging — local, decentralized, verifiable"
+                        font.pixelSize: 10
+                        color: "#8b949e"
+                    }
+                }
+
+                // Status badge
+                Rectangle {
+                    Layout.preferredWidth: badge.implicitWidth + 16
+                    Layout.preferredHeight: 24
+                    radius: 12
+                    color: root.statusError ? "#572421" : "#1a3f2e"
+                    border.color: root.statusError ? "#f85149" : "#56d364"
+                    border.width: 1
+
+                    Row {
+                        id: badge
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Rectangle {
+                            width: 8; height: 8; radius: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: root.statusError ? "#f85149" : "#56d364"
+                        }
+                        Text {
+                            text: root.statusError ? "daemon offline" : "daemon ready"
+                            color: root.statusError ? "#f85149" : "#56d364"
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                     }
                 }
             }
@@ -124,7 +152,7 @@ Item {
         // ── Pane 1: Status ──────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: statusGrid.implicitHeight + 24
+            Layout.preferredHeight: 110
             color: "#161b22"
             radius: 6
             border.color: "#30363d"
@@ -392,9 +420,14 @@ Item {
         }
 
         // ── Pane 4: Trust ──────────────────────────────────────
+        // Bounded height: the Peers + Delegate row above uses
+        // `Layout.fillHeight: true` and gets squeezed if Trust requests
+        // implicitHeight. Cap to ~260 px so this pane stays visible
+        // without crowding out the panes above it. The peer list inside
+        // is scrollable, so longer trust lists still work.
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: trustCol.implicitHeight + 24
+            Layout.preferredHeight: 260
             color: "#161b22"
             radius: 6
             border.color: "#30363d"
@@ -522,13 +555,16 @@ Item {
                     }
                 }
 
-                // Trust list (table-ish)
+                // Trust list (table-ish) — fillHeight inside the bounded
+                // parent pane, scrolls when there are more entries than fit.
                 ListView {
                     id: trustList
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 160
+                    Layout.fillHeight: true
                     clip: true
                     spacing: 4
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                     model: ListModel { id: trustModel }
 
                     delegate: Rectangle {
