@@ -59,7 +59,7 @@ use logos_messaging_a2a_core::AgentCard;
 use logos_messaging_a2a_core::RetryConfig;
 /// Re-export of [`logos_messaging_a2a_core::Task`] for convenience.
 pub use logos_messaging_a2a_core::Task as TaskType;
-use logos_messaging_a2a_core::TrustList;
+use logos_messaging_a2a_core::{TrustEntry, TrustList, TrustMode};
 use logos_messaging_a2a_crypto::{AgentIdentity, IntroBundle};
 use logos_messaging_a2a_transport::sds::{ChannelConfig, MessageChannel};
 use logos_messaging_a2a_transport::Transport;
@@ -132,7 +132,12 @@ pub struct LmaoNode<T: Transport> {
     /// Friend-keyring filter applied at delegation peer selection and
     /// incoming-task acceptance. Default = empty list in `TrustMode::Off`,
     /// which matches pre-trust behaviour: no filtering at all.
-    trust_list: Arc<TrustList>,
+    ///
+    /// Wrapped in `Arc<RwLock<…>>` so the daemon's IPC handlers can
+    /// mutate the list at runtime (Basecamp Trust pane, `lmao trust add`
+    /// against a live agent) without restarting the agent. Reads are
+    /// frequent (every poll_tasks / delegate_task call); writes are rare.
+    trust_list: Arc<std::sync::RwLock<TrustList>>,
 }
 
 impl<T: Transport> LmaoNode<T> {
@@ -178,7 +183,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
-            trust_list: Arc::new(TrustList::empty()),
+            trust_list: Arc::new(std::sync::RwLock::new(TrustList::empty())),
         }
     }
 
@@ -232,7 +237,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
-            trust_list: Arc::new(TrustList::empty()),
+            trust_list: Arc::new(std::sync::RwLock::new(TrustList::empty())),
         }
     }
 
@@ -283,7 +288,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
-            trust_list: Arc::new(TrustList::empty()),
+            trust_list: Arc::new(std::sync::RwLock::new(TrustList::empty())),
         }
     }
 
@@ -418,7 +423,7 @@ impl<T: Transport> LmaoNode<T> {
             retry_config: None,
             round_robin_counter: AtomicUsize::new(0),
             metrics: Metrics::new(),
-            trust_list: Arc::new(TrustList::empty()),
+            trust_list: Arc::new(std::sync::RwLock::new(TrustList::empty())),
         }
     }
 
@@ -468,15 +473,66 @@ impl<T: Transport> LmaoNode<T> {
     /// When the list is in `TrustMode::Off` (the default for unconfigured
     /// nodes) both filters are no-ops and behaviour is identical to a
     /// node without a trust list.
-    pub fn with_trust_list(mut self, list: Arc<TrustList>) -> Self {
-        self.trust_list = list;
+    pub fn with_trust_list(mut self, list: TrustList) -> Self {
+        self.trust_list = Arc::new(std::sync::RwLock::new(list));
         self
     }
 
-    /// Read-only access to the configured trust list. Returns the empty
-    /// `Off`-mode list if `with_trust_list` was never called.
-    pub fn trust_list(&self) -> &TrustList {
-        &self.trust_list
+    /// Is this pubkey on the local trust list? Read-locks briefly. In
+    /// `TrustMode::Off` returns true for every pubkey.
+    pub fn is_trusted(&self, pubkey: &str) -> bool {
+        self.trust_list.read().unwrap().is_trusted(pubkey)
+    }
+
+    /// Is this pubkey trusted for the named capability? Read-locks briefly.
+    /// Empty per-entry capability list trusts the peer for any capability.
+    pub fn is_trusted_for(&self, pubkey: &str, capability: &str) -> bool {
+        self.trust_list
+            .read()
+            .unwrap()
+            .is_trusted_for(pubkey, capability)
+    }
+
+    /// Current enforcement mode.
+    pub fn trust_mode(&self) -> TrustMode {
+        self.trust_list.read().unwrap().mode()
+    }
+
+    /// A snapshot of the trust list — useful for IPC handlers and CLI
+    /// `lmao trust list`. Cheap because the list is small (tens to low
+    /// hundreds of entries).
+    pub fn trust_snapshot(&self) -> (TrustMode, Vec<TrustEntry>) {
+        let g = self.trust_list.read().unwrap();
+        (g.mode(), g.iter().cloned().collect())
+    }
+
+    /// Insert (or replace) a peer entry. Persistent storage (TOML file)
+    /// is the caller's responsibility — typically the daemon writes the
+    /// file after this returns successfully.
+    pub fn trust_add(&self, entry: TrustEntry) {
+        self.trust_list.write().unwrap().add(entry);
+    }
+
+    /// Remove a peer by pubkey first, then by nickname. Returns the
+    /// dropped entry on success, None if no entry matched.
+    pub fn trust_remove(&self, target: &str) -> Option<TrustEntry> {
+        let mut g = self.trust_list.write().unwrap();
+        g.remove(target).or_else(|| g.remove_by_nickname(target))
+    }
+
+    /// Change the enforcement mode at runtime.
+    pub fn trust_set_mode(&self, mode: TrustMode) {
+        self.trust_list.write().unwrap().set_mode(mode);
+    }
+
+    /// Persist the current trust list to disk. Used by the daemon after
+    /// each mutation so a restart picks up the same state.
+    pub fn trust_save_to(&self, path: &std::path::Path) -> Result<()> {
+        self.trust_list
+            .read()
+            .unwrap()
+            .save_to(path)
+            .map_err(|e| NodeError::Other(format!("trust save failed: {e}")))
     }
 
     /// Get this agent's public key hex string.

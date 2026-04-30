@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -251,6 +252,49 @@ std::string AgentImpl::fetch_cid(const std::string& cid) {
     QJsonObject req;
     req["kind"] = "storage_fetch";
     req["cid"] = QString::fromStdString(cid);
+    return sendRequest(m_state->socketPath, req).toStdString();
+}
+
+std::string AgentImpl::trust_list() {
+    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    return simpleRequest(m_state->socketPath, "trust_list").toStdString();
+}
+
+std::string AgentImpl::trust_add(const std::string& pubkey,
+                                 const std::string& nickname,
+                                 const std::string& capabilities,
+                                 const std::string& notes) {
+    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    QJsonObject req;
+    req["kind"] = "trust_add";
+    req["pubkey"] = QString::fromStdString(pubkey);
+    req["nickname"] = QString::fromStdString(nickname);
+    QJsonArray caps;
+    if (!capabilities.empty()) {
+        const auto qcaps = QString::fromStdString(capabilities).split(
+            ',', Qt::SkipEmptyParts);
+        for (const auto& c : qcaps) caps.append(c.trimmed());
+    }
+    req["capabilities"] = caps;
+    req["notes"] = notes.empty() ? QJsonValue(QJsonValue::Null)
+                                 : QJsonValue(QString::fromStdString(notes));
+    return sendRequest(m_state->socketPath, req).toStdString();
+}
+
+std::string AgentImpl::trust_remove(const std::string& target) {
+    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    QJsonObject req;
+    req["kind"] = "trust_remove";
+    req["target"] = QString::fromStdString(target);
+    return sendRequest(m_state->socketPath, req).toStdString();
+}
+
+std::string AgentImpl::trust_mode(const std::string& new_mode) {
+    if (!m_state->started) return errorJson("daemon not running").toStdString();
+    QJsonObject req;
+    req["kind"] = "trust_mode";
+    req["mode"] = new_mode.empty() ? QJsonValue(QJsonValue::Null)
+                                   : QJsonValue(QString::fromStdString(new_mode));
     return sendRequest(m_state->socketPath, req).toStdString();
 }
 

@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     }
     // Trust list commands are pure file IO — no transport, no daemon.
     if let Commands::Trust { action } = cli.command {
-        return trust::handle(action, cli.trust_file, cli.keyfile, cli.json).await;
+        return trust::handle(action, cli.trust_file, daemon_socket, cli.keyfile, cli.json).await;
     }
 
     // Daemon-aware commands (task / presence / agent discover) probe

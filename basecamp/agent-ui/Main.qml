@@ -6,11 +6,12 @@ import QtQuick.Layouts
 // running `lmao agent run` daemon over Unix-socket IPC. All operations
 // route through `logos.callModule("agent", method, args)`.
 //
-// Four panes:
+// Five panes:
 //   1. Status     — daemon identity, uptime, capabilities
 //   2. Peers      — live PeerMap from presence broadcasts, capability filter
 //   3. Delegate   — capability + text → routed task → response
-//   4. Audit      — paste a codex:// CID, fetch the bytes
+//   4. Trust      — friend-keyring management (mode, list, add/remove)
+//   5. Audit      — paste a codex:// CID, fetch the bytes
 Item {
     id: root
 
@@ -390,7 +391,222 @@ Item {
             }
         }
 
-        // ── Pane 4: Audit ──────────────────────────────────────
+        // ── Pane 4: Trust ──────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: trustCol.implicitHeight + 24
+            color: "#161b22"
+            radius: 6
+            border.color: "#30363d"
+            border.width: 1
+
+            ColumnLayout {
+                id: trustCol
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+
+                // Trust pane state
+                property string trustMode: ""
+                property string trustFile: ""
+                property var    trustEntries: []
+                property string trustError: ""
+
+                function refreshTrust() {
+                    const raw = logos.callModule("agent", "trust_list", []);
+                    const obj = root.parseModuleJson(raw);
+                    if (!obj || obj.error) {
+                        trustError = obj && obj.error ? obj.error : "no response";
+                        trustEntries = [];
+                        return;
+                    }
+                    trustError = "";
+                    trustMode = obj.mode || "";
+                    trustFile = obj.trust_file || "";
+                    trustEntries = obj.entries || [];
+                    trustModel.clear();
+                    for (let i = 0; i < trustEntries.length; i++) {
+                        trustModel.append(trustEntries[i]);
+                    }
+                }
+
+                Component.onCompleted: refreshTrust()
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    Text {
+                        text: "Friend-keyring trust list"
+                        color: "#ffffff"
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+
+                    Text {
+                        text: "Mode:"
+                        color: "#8b949e"
+                        font.pixelSize: 12
+                    }
+                    ComboBox {
+                        id: modeBox
+                        Layout.preferredWidth: 110
+                        model: ["off", "enforce", "log"]
+                        currentIndex: trustCol.trustMode === "enforce" ? 1 :
+                                      trustCol.trustMode === "log"     ? 2 : 0
+                        onActivated: {
+                            const next = model[currentIndex];
+                            if (next === trustCol.trustMode) return;
+                            const raw = logos.callModule("agent", "trust_mode", [next]);
+                            const obj = root.parseModuleJson(raw);
+                            if (obj && obj.error) {
+                                console.warn("trust_mode:", obj.error);
+                                return;
+                            }
+                            trustCol.refreshTrust();
+                        }
+                    }
+
+                    Button {
+                        text: "Refresh"
+                        onClicked: trustCol.refreshTrust()
+                    }
+                }
+
+                Text {
+                    visible: trustCol.trustFile.length > 0
+                    text: "trust file: " + trustCol.trustFile
+                    color: "#6e7681"
+                    font.pixelSize: 10
+                    font.family: "monospace"
+                    Layout.fillWidth: true
+                    elide: Text.ElideMiddle
+                }
+
+                // Add new entry
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    TextField {
+                        id: addPubkey
+                        placeholderText: "pubkey (hex)"
+                        Layout.fillWidth: true
+                    }
+                    TextField {
+                        id: addNickname
+                        placeholderText: "nickname"
+                        Layout.preferredWidth: 110
+                    }
+                    TextField {
+                        id: addCaps
+                        placeholderText: "caps (comma-sep, blank=any)"
+                        Layout.preferredWidth: 200
+                    }
+                    Button {
+                        text: "Add"
+                        enabled: addPubkey.text.length > 0 && addNickname.text.length > 0
+                        onClicked: {
+                            const raw = logos.callModule("agent", "trust_add",
+                                [addPubkey.text.trim(), addNickname.text.trim(),
+                                 addCaps.text.trim(), ""]);
+                            const obj = root.parseModuleJson(raw);
+                            if (obj && obj.error) {
+                                console.warn("trust_add:", obj.error);
+                                return;
+                            }
+                            addPubkey.text = "";
+                            addNickname.text = "";
+                            addCaps.text = "";
+                            trustCol.refreshTrust();
+                        }
+                    }
+                }
+
+                // Trust list (table-ish)
+                ListView {
+                    id: trustList
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 160
+                    clip: true
+                    spacing: 4
+                    model: ListModel { id: trustModel }
+
+                    delegate: Rectangle {
+                        width: ListView.view.width
+                        height: 38
+                        color: "#0d1117"
+                        radius: 4
+                        border.color: "#21262d"
+                        border.width: 1
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 8
+
+                            Text {
+                                text: model.nickname
+                                color: "#7ee787"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                Layout.preferredWidth: 100
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                text: root.shorten(model.pubkey, 18)
+                                color: "#6e7681"
+                                font.pixelSize: 10
+                                font.family: "monospace"
+                                Layout.preferredWidth: 160
+                            }
+                            Text {
+                                text: "caps: " +
+                                      ((model.capabilities && model.capabilities.length > 0)
+                                          ? Array.from(model.capabilities).join(", ")
+                                          : "(any)")
+                                color: "#8b949e"
+                                font.pixelSize: 10
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                            Button {
+                                text: "Remove"
+                                onClicked: {
+                                    const raw = logos.callModule("agent", "trust_remove",
+                                                                 [model.pubkey]);
+                                    const obj = root.parseModuleJson(raw);
+                                    if (obj && obj.error) {
+                                        console.warn("trust_remove:", obj.error);
+                                        return;
+                                    }
+                                    trustCol.refreshTrust();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    visible: trustModel.count === 0
+                    text: trustCol.trustMode === "off"
+                          ? "Trust mode is OFF — every peer is accepted. Add an entry to enable filtering."
+                          : "No trusted peers yet — add one above."
+                    color: "#6e7681"
+                    font.pixelSize: 11
+                    font.italic: true
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Text {
+                    visible: trustCol.trustError.length > 0
+                    text: "Error: " + trustCol.trustError
+                    color: "#f85149"
+                    font.pixelSize: 11
+                }
+            }
+        }
+
+        // ── Pane 5: Audit ──────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 130

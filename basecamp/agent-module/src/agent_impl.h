@@ -54,6 +54,27 @@ public:
     /// is reachable.
     bool is_running();
 
+    /// Snapshot the daemon's friend-keyring trust list. Returns the
+    /// JSON daemon response: `{kind: "trust_list", mode, entries: […],
+    /// trust_file?}`.
+    std::string trust_list();
+
+    /// Add (or replace) a trusted peer. `capabilities` is a comma-
+    /// separated list — empty string means "trusted for any capability".
+    /// `notes` may be empty. Returns the JSON daemon response.
+    std::string trust_add(const std::string& pubkey,
+                          const std::string& nickname,
+                          const std::string& capabilities,
+                          const std::string& notes);
+
+    /// Remove a trusted peer by pubkey *or* nickname.
+    std::string trust_remove(const std::string& target);
+
+    /// Get or set the trust enforcement mode. Pass an empty string to
+    /// query without changing it; otherwise `"off"`, `"enforce"`, or
+    /// `"log"`.
+    std::string trust_mode(const std::string& new_mode);
+
 private:
     struct State;
     State* m_state;

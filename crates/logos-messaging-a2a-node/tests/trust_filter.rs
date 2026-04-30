@@ -106,7 +106,7 @@ async fn enforce_mode_drops_untrusted_sender() {
             vec!["text".into()],
             alice.channel().transport().clone(),
         )
-        .with_trust_list(Arc::new(list)),
+        .with_trust_list(list),
     );
 
     // alice opens her inbox; the cell stays sticky for the polling loop.
@@ -150,7 +150,7 @@ async fn log_mode_accepts_untrusted_but_counts_them() {
             vec!["text".into()],
             alice.channel().transport().clone(),
         )
-        .with_trust_list(Arc::new(list)),
+        .with_trust_list(list),
     );
 
     alice.poll_tasks().await.unwrap();
@@ -212,7 +212,7 @@ async fn outgoing_capability_match_filters_to_trusted_peers() {
             vec!["text".into()],
             alice.channel().transport().clone(),
         )
-        .with_trust_list(Arc::new(list)),
+        .with_trust_list(list),
     );
 
     // Hand-inject presence into alice's PeerMap for both candidates so
@@ -287,7 +287,7 @@ async fn delegate_errors_when_no_trusted_peer_advertises_capability() {
             vec!["text".into()],
             alice.channel().transport().clone(),
         )
-        .with_trust_list(Arc::new(TrustList::with_mode(TrustMode::Enforce))),
+        .with_trust_list(TrustList::with_mode(TrustMode::Enforce)),
     );
     alice.peers().update(&PresenceAnnouncement {
         agent_id: charlie.pubkey().to_string(),

@@ -144,7 +144,7 @@ pub async fn handle(
             let trust_count = trust_list.len();
             let node = Arc::new(
                 build_node(&name, &format!("{} agent", name), caps, transport, identity)?
-                    .with_trust_list(Arc::new(trust_list)),
+                    .with_trust_list(trust_list),
             );
 
             if json {
@@ -199,6 +199,7 @@ pub async fn handle(
                 node.clone(),
                 storage.clone(),
                 name.clone(),
+                Some(trust_path.clone()),
             ));
             tokio::spawn(server.serve());
 

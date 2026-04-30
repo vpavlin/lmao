@@ -31,14 +31,13 @@ impl<T: Transport> LmaoNode<T> {
         // the candidate set in `TrustMode::Enforce` / `Log`; in
         // `TrustMode::Off` `is_trusted*` returns true for every pubkey
         // and the closure is a no-op.
-        let trust = self.trust_list();
         let peer_id = match &request.strategy {
             DelegationStrategy::FirstAvailable => {
                 let peers = self.peers().all_live();
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
-                    .find(|id| trust.is_trusted(id))
+                    .find(|id| self.is_trusted(id))
                     .ok_or_else(|| {
                         NodeError::Other("no live peers available for delegation".into())
                     })?
@@ -48,7 +47,7 @@ impl<T: Transport> LmaoNode<T> {
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
-                    .find(|id| trust.is_trusted_for(id, capability))
+                    .find(|id| self.is_trusted_for(id, capability))
                     .ok_or_else(|| {
                         NodeError::Other(format!(
                             "no live peers with capability '{capability}' for delegation"
@@ -61,7 +60,7 @@ impl<T: Transport> LmaoNode<T> {
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
-                    .find(|id| trust.is_trusted(id))
+                    .find(|id| self.is_trusted(id))
                     .ok_or_else(|| {
                         NodeError::Other("no live peers available for broadcast delegation".into())
                     })?
@@ -72,7 +71,7 @@ impl<T: Transport> LmaoNode<T> {
                     .all_live()
                     .into_iter()
                     .map(|(id, _)| id)
-                    .filter(|id| trust.is_trusted(id))
+                    .filter(|id| self.is_trusted(id))
                     .collect();
                 if peers.is_empty() {
                     return Err(NodeError::Other(
@@ -102,13 +101,12 @@ impl<T: Transport> LmaoNode<T> {
             request.timeout_secs
         };
 
-        let trust = self.trust_list();
         let peer_ids: Vec<String> = match &request.strategy {
             DelegationStrategy::CapabilityMatch { capability } => self
                 .find_peers_by_capability(capability)
                 .into_iter()
                 .map(|(id, _)| id)
-                .filter(|id| trust.is_trusted_for(id, capability))
+                .filter(|id| self.is_trusted_for(id, capability))
                 .collect(),
             // RoundRobin, BroadcastCollect, FirstAvailable all broadcast to every peer
             _ => self
@@ -116,7 +114,7 @@ impl<T: Transport> LmaoNode<T> {
                 .all_live()
                 .into_iter()
                 .map(|(id, _)| id)
-                .filter(|id| trust.is_trusted(id))
+                .filter(|id| self.is_trusted(id))
                 .collect(),
         };
 

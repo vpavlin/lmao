@@ -2,17 +2,21 @@
 //! [`Request`]s against a shared LmaoNode + storage backend.
 
 use anyhow::{anyhow, Context, Result};
-use logos_messaging_a2a_core::{DelegationRequest, DelegationStrategy, Task};
+use logos_messaging_a2a_core::{
+    DelegationRequest, DelegationStrategy, Task, TrustEntry, TrustMode,
+};
 use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_storage::StorageBackend;
 use logos_messaging_a2a_transport::Transport;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio::net::{UnixListener, UnixStream};
 
 use super::frame::{read_frame, write_frame};
-use super::protocol::{AgentCardWire, DelegationWire, PeerWire, Request, Response, TaskWire};
+use super::protocol::{
+    AgentCardWire, DelegationWire, PeerWire, Request, Response, TaskWire, TrustEntryWire,
+};
 
 /// Background server attached to an `lmao agent run` process. Holds an
 /// `Arc<LmaoNode>` (shared with the inbox loop) and an optional storage
@@ -26,6 +30,10 @@ pub struct DaemonServer {
     /// Display name from the agent — surfaced via the `info` response so
     /// clients can confirm they're talking to the right daemon.
     name: String,
+    /// Path to the trust file the daemon was started with. Trust
+    /// mutations write back to this path so a restart picks up the
+    /// changes. `None` if no file was configured (in-memory only).
+    trust_file: Option<PathBuf>,
 }
 
 impl DaemonServer {
@@ -34,6 +42,7 @@ impl DaemonServer {
         node: Arc<LmaoNode<Arc<dyn Transport>>>,
         storage: Option<Arc<dyn StorageBackend>>,
         name: String,
+        trust_file: Option<PathBuf>,
     ) -> Self {
         Self {
             socket_path,
@@ -41,6 +50,7 @@ impl DaemonServer {
             storage,
             started_at: Instant::now(),
             name,
+            trust_file,
         }
     }
 
@@ -82,6 +92,25 @@ impl DaemonServer {
                 }
             });
         }
+    }
+
+    /// Persist the current trust list to the configured file, if any.
+    /// Returns true if a write happened, false if no file is configured.
+    /// Logs (but does not surface) write errors — a failed persist
+    /// shouldn't block the in-memory mutation from taking effect, since
+    /// the next restart can be re-seeded from CLI.
+    fn persist_trust(&self) -> bool {
+        let Some(ref path) = self.trust_file else {
+            return false;
+        };
+        if let Err(e) = self.node.trust_save_to(path) {
+            eprintln!(
+                "[daemon] persisting trust list to {} failed: {e}",
+                path.display()
+            );
+            return false;
+        }
+        true
     }
 
     async fn handle_connection(self: Arc<Self>, mut stream: UnixStream) -> Result<()> {
@@ -221,6 +250,81 @@ impl DaemonServer {
                 let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 Ok(Response::StorageFetch { cid, payload_b64 })
             }
+            Request::TrustList => {
+                let (mode, entries) = self.node.trust_snapshot();
+                Ok(Response::TrustList {
+                    mode: mode_to_str(mode).to_string(),
+                    entries: entries
+                        .into_iter()
+                        .map(|e| TrustEntryWire {
+                            pubkey: e.pubkey,
+                            nickname: e.nickname,
+                            capabilities: e.capabilities,
+                            notes: e.notes,
+                        })
+                        .collect(),
+                    trust_file: self.trust_file.clone(),
+                })
+            }
+            Request::TrustAdd {
+                pubkey,
+                nickname,
+                capabilities,
+                notes,
+            } => {
+                // First add: bump Off → Enforce so the list is actually
+                // applied. Mirrors the `lmao trust add` CLI behaviour.
+                let (current_mode, before_count) = {
+                    let snap = self.node.trust_snapshot();
+                    (snap.0, snap.1.len())
+                };
+                if matches!(current_mode, TrustMode::Off) && before_count == 0 {
+                    self.node.trust_set_mode(TrustMode::Enforce);
+                }
+                self.node.trust_add(TrustEntry {
+                    pubkey: pubkey.clone(),
+                    nickname: nickname.clone(),
+                    capabilities,
+                    notes,
+                    added_at: SystemTime::now(),
+                });
+                let persisted = self.persist_trust();
+                Ok(Response::TrustAdd {
+                    pubkey,
+                    nickname,
+                    persisted,
+                })
+            }
+            Request::TrustRemove { target } => {
+                let dropped = self
+                    .node
+                    .trust_remove(&target)
+                    .ok_or_else(|| anyhow!("no entry matched {target}"))?;
+                let persisted = self.persist_trust();
+                Ok(Response::TrustRemove {
+                    pubkey: dropped.pubkey,
+                    nickname: dropped.nickname,
+                    persisted,
+                })
+            }
+            Request::TrustMode { mode } => {
+                let previous = self.node.trust_mode();
+                let next = match mode.as_deref() {
+                    None => previous,
+                    Some(s) => parse_trust_mode(s)?,
+                };
+                let persisted = if next != previous {
+                    self.node.trust_set_mode(next);
+                    self.persist_trust()
+                } else {
+                    false
+                };
+                Ok(Response::TrustMode {
+                    previous: mode_to_str(previous).to_string(),
+                    current: mode_to_str(next).to_string(),
+                    persisted,
+                })
+            }
             Request::Shutdown => {
                 // Reply first; the spawned task will exit the process
                 // after we return. The accept loop will then exit on
@@ -234,6 +338,25 @@ impl DaemonServer {
                 Ok(Response::ShutdownAck)
             }
         }
+    }
+}
+
+fn mode_to_str(mode: TrustMode) -> &'static str {
+    match mode {
+        TrustMode::Off => "off",
+        TrustMode::Enforce => "enforce",
+        TrustMode::Log => "log",
+    }
+}
+
+fn parse_trust_mode(s: &str) -> Result<TrustMode> {
+    match s.to_ascii_lowercase().as_str() {
+        "off" => Ok(TrustMode::Off),
+        "enforce" => Ok(TrustMode::Enforce),
+        "log" => Ok(TrustMode::Log),
+        other => Err(anyhow!(
+            "unknown trust mode: {other} (expected off|enforce|log)"
+        )),
     }
 }
 

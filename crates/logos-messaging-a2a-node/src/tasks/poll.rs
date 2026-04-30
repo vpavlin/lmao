@@ -145,12 +145,11 @@ impl<T: Transport> LmaoNode<T> {
     /// - `TrustMode::Log`: log a warning but still accept; bumps the
     ///   counter for visibility.
     fn accept_or_drop(&self, task: &Task) -> bool {
-        let trust = self.trust_list();
-        if trust.is_trusted(&task.from) {
+        if self.is_trusted(&task.from) {
             return true;
         }
         Metrics::inc(&self.metrics.tasks_dropped_untrusted);
-        match trust.mode() {
+        match self.trust_mode() {
             TrustMode::Off => true, // unreachable: is_trusted is always true in Off
             TrustMode::Enforce => {
                 tracing::debug!(

@@ -42,6 +42,21 @@ pub enum Request {
     /// Fetch raw bytes by CID from the daemon's storage backend, if
     /// configured.
     StorageFetch { cid: String },
+    /// Snapshot the daemon's trust list (mode + entries).
+    TrustList,
+    /// Add or replace a trusted peer. Daemon mutates the in-memory
+    /// list and persists to its trust file (if one was loaded).
+    TrustAdd {
+        pubkey: String,
+        nickname: String,
+        capabilities: Vec<String>,
+        notes: Option<String>,
+    },
+    /// Remove a trusted peer by pubkey or nickname.
+    TrustRemove { target: String },
+    /// Set the enforcement mode. Pass `mode = None` to query without
+    /// changing it.
+    TrustMode { mode: Option<String> },
     /// Graceful shutdown — daemon completes in-flight work, drops the
     /// socket, exits the process.
     Shutdown,
@@ -81,6 +96,29 @@ pub enum Response {
         /// Base64-encoded payload bytes.
         payload_b64: String,
     },
+    TrustList {
+        mode: String,
+        entries: Vec<TrustEntryWire>,
+        /// Path the daemon will persist mutations to. `None` if the
+        /// daemon has no trust file configured (in which case writes
+        /// are in-memory only).
+        trust_file: Option<PathBuf>,
+    },
+    TrustAdd {
+        pubkey: String,
+        nickname: String,
+        persisted: bool,
+    },
+    TrustRemove {
+        pubkey: String,
+        nickname: String,
+        persisted: bool,
+    },
+    TrustMode {
+        previous: String,
+        current: String,
+        persisted: bool,
+    },
     ShutdownAck,
     Error {
         message: String,
@@ -117,6 +155,15 @@ pub struct TaskWire {
     pub to: String,
     pub text: Option<String>,
     pub result_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustEntryWire {
+    pub pubkey: String,
+    pub nickname: String,
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +247,20 @@ mod tests {
                 strategy: Some("capability_match".into()),
             },
             Request::StorageFetch { cid: "Q...".into() },
+            Request::TrustList,
+            Request::TrustAdd {
+                pubkey: "02ab".into(),
+                nickname: "alice".into(),
+                capabilities: vec!["text".into()],
+                notes: Some("ETHPrague".into()),
+            },
+            Request::TrustRemove {
+                target: "alice".into(),
+            },
+            Request::TrustMode {
+                mode: Some("enforce".into()),
+            },
+            Request::TrustMode { mode: None },
             Request::Shutdown,
         ];
         for req in cases {
@@ -269,6 +330,31 @@ mod tests {
             Response::StorageFetch {
                 cid: "Q...".into(),
                 payload_b64: "aGVsbG8=".into(),
+            },
+            Response::TrustList {
+                mode: "enforce".into(),
+                entries: vec![TrustEntryWire {
+                    pubkey: "02ab".into(),
+                    nickname: "alice".into(),
+                    capabilities: vec!["text".into()],
+                    notes: None,
+                }],
+                trust_file: Some(PathBuf::from("/home/u/.config/lmao/trust.toml")),
+            },
+            Response::TrustAdd {
+                pubkey: "02ab".into(),
+                nickname: "alice".into(),
+                persisted: true,
+            },
+            Response::TrustRemove {
+                pubkey: "02ab".into(),
+                nickname: "alice".into(),
+                persisted: true,
+            },
+            Response::TrustMode {
+                previous: "off".into(),
+                current: "enforce".into(),
+                persisted: true,
             },
             Response::ShutdownAck,
             Response::Error {
