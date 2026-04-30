@@ -92,22 +92,26 @@ make demo
 ═══ LMAO demo on logos.dev ═══
 
 [1/5] preparing identities + friend-keyring trust lists…
-  alice (037f5a93b57295d2…) trusts bob   for code,review
-  bob   (02df631ad6f0ac99…) trusts alice for text,summarize
+  alice   (037f5a93b57295d2…) trusts bob   for code,review
+  bob     (02df631ad6f0ac99…) trusts alice for text,summarize
+  charlie (04ef…)              on the mesh, NOT in alice's or bob's list
+                                (advertises code,review — same caps as bob)
 
-[2/5] starting two agents (persistent identities + Codex + IPC sockets + trust filter)…
+[2/5] starting three agents on logos.dev (persistent identities + Codex + IPC + trust filter)…
   starting alice (caps: text,summarize, … trust:alice-trust.toml)...
   starting bob   (caps: code,review,    … trust:bob-trust.toml)...
+  starting charlie (caps: code,review,  … trust:charlie-trust.toml)...
   waiting for each to connect to logos.dev…
 ```
 
-**Say**: "Two processes, each with a persistent secp256k1 identity, each
+**Say**: "Three processes, each with a persistent secp256k1 identity, each
 joining the live `logos.dev` gossip mesh on its own libp2p port. No
-servers. No central registry. **And before they even start, they
-exchange pubkeys and write a local trust file** — alice's lists bob,
-bob's lists alice. That's the whole trust layer in v1: SSH `known_hosts`
-for agents. The agents read the file at startup; from now on neither
-will accept a task from a stranger or delegate to one."
+servers. No central registry. **And before they even start, alice and
+bob exchange pubkeys and write a local trust file** — alice trusts bob,
+bob trusts alice. **Charlie's a third agent who advertises the exact
+same capabilities as bob — `code,review` — but he's not in either trust
+list.** Watch what happens when alice tries to delegate: the trust
+filter is what makes this safe."
 
 The `wait_for_pubkey` helper holds the script until each agent prints
 its pubkey, which happens once it's *actually* connected to the mesh —
@@ -120,27 +124,31 @@ network handshake.
 
 ```
 [3/5] discovering peers via presence (through alice's daemon — no new node)…
-peer  bob  03cd9876…  caps=[code,review]  ttl=60s
+peer  bob      03cd9876…  caps=[code,review]    ttl=60s
+peer  charlie  04ef1234…  caps=[code,review]    ttl=60s
+  ↑ alice sees both bob and charlie. Both advertise code,review.
+    Without the trust filter, alice's next CapabilityMatch would be a coin flip.
 ```
 
 **Say**: "Discovery is gossiped on `/lmao/1/presence/proto` — every agent
 broadcasts a signed `PresenceAnnouncement` with its capabilities, every
-peer keeps a `PeerMap` aged out by TTL. We're running this query through
-**alice's already-running daemon** — IPC over a Unix socket — instead of
-spinning up a fresh logos-delivery node, which would take another five
-seconds to join the mesh. The daemon collapses that to a sub-millisecond
-round-trip."
+peer keeps a `PeerMap` aged out by TTL. **Alice sees both bob and
+charlie. They look identical from a capability standpoint.** We're
+running this query through alice's already-running daemon — IPC over a
+Unix socket — instead of spinning up a fresh logos-delivery node, which
+would take another five seconds to join the mesh."
 
 This is the key architectural beat. Linger here.
 
-### Step 3 — capability-routed delegation
+### Step 3 — capability-routed delegation (the trust filter doing real work)
 
 **Show**:
 
 ```
-[4/5] delegating a task by capability=code → bob (via alice's daemon)…
-  alice's CapabilityMatch picks from peers ∩ trust list — bob qualifies;
-  any stranger advertising 'code' on the gossip mesh would be filtered out.
+[4/5] alice delegates a code-review task — the filter routes only to bob…
+  candidates (from peers): bob, charlie  ← both advertise 'code'
+  ∩ alice's trust list:    {bob}         ← charlie is NOT in alice's list
+  → CapabilityMatch picks bob; charlie is skipped despite matching caps.
 delegating to bob (caps=[code,review]) for parent task <uuid>…
 result from bob: <Goose output>
 
@@ -149,11 +157,25 @@ execution log: codex://Qm…
 
 **Say**: "Alice didn't address bob by pubkey — she said 'whoever has the
 `code` capability'. The delegation strategy is `CapabilityMatch`, **but
-the candidate set is intersected with the trust list first.** Even if
-someone else on logos.dev advertises `code`, alice would skip them.
-Bob got the task, ran it through Goose, and replied with the answer
-plus a **content-addressed pointer to the full execution log** — every
-LLM message, every tool call, every error — uploaded to embedded Codex."
+the candidate set is intersected with the trust list first.** Both bob
+*and* charlie advertise `code` — they're indistinguishable to a naive
+router. Alice picks bob because alice trusts bob. Charlie watched the
+whole thing happen on the mesh and got nothing. **This is the friend-
+keyring doing real work, on a real public network, against a real third
+agent.** Bob got the task, ran it through Goose, and replied with the
+answer plus a **content-addressed pointer to the full execution log**
+— every LLM message, every tool call, every error — uploaded to
+embedded Codex."
+
+If you want to drive the point home, after the demo run:
+
+```bash
+grep -c CHARLIE-RAN-THIS-FILTER-FAILED .demo/charlie.log   # → 0
+```
+
+Charlie's exec is a `sed` stub that tags every task it processes with
+that string. Zero hits = filter held. Any non-zero count is a
+regression worth investigating before the talk.
 
 Substitutions for the live audience to land the point:
 

@@ -37,6 +37,10 @@ fn print_metrics(node: &LmaoNode<Arc<dyn Transport>>, json: bool) -> Result<()> 
         println!("Retry attempts:         {}", snap.retry_attempts);
         println!("Retries exhausted:      {}", snap.retries_exhausted);
         println!("Responses sent:         {}", snap.responses_sent);
+        println!(
+            "Tasks dropped (untrusted): {}",
+            snap.tasks_dropped_untrusted
+        );
     }
 
     Ok(())
