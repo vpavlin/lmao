@@ -610,42 +610,113 @@ Item {
                             }
                             const peers = obj.peers || [];
                             for (let i = 0; i < peers.length; i++) {
-                                peersModel.append(peers[i]);
+                                const p = peers[i];
+                                // Pre-flatten capabilities into a comma-string
+                                // because ListModel.append loses nested arrays
+                                // through the universal-module bridge.
+                                const caps = Array.isArray(p.capabilities)
+                                    ? p.capabilities
+                                    : (p.capabilities ? [p.capabilities] : []);
+                                peersModel.append({
+                                    name: p.name || "",
+                                    agent_id: p.agent_id || "",
+                                    capsCsv: caps.join(", "),
+                                    firstCap: caps[0] || ""
+                                });
                             }
                         }
 
                         delegate: Rectangle {
+                            id: peerRow
                             width: ListView.view.width
-                            height: peerCol.implicitHeight + 12
-                            color: theme.backgroundElevated
-                            radius: 4
-                            border.color: theme.borderSubtle
+                            height: peerCol.implicitHeight + 16
+                            color: peerArea.containsMouse
+                                ? Qt.lighter(theme.backgroundElevated, 1.3)
+                                : theme.backgroundElevated
+                            radius: theme.radiusMedium
+                            border.color: peerArea.containsMouse ? theme.primary : theme.borderSubtle
                             border.width: 1
+
+                            // Click-to-prefill: populates the Delegate
+                            // pane's Capability with this peer's first
+                            // capability so a delegation goes to it on
+                            // the next click. The trust filter still
+                            // applies — peers that aren't trusted will
+                            // be skipped even if "selected" here.
+                            MouseArea {
+                                id: peerArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (model.firstCap) {
+                                        delegateCap.text = model.firstCap;
+                                    }
+                                    peersFilter.text = "";
+                                    delegateText.forceActiveFocus();
+                                }
+                            }
 
                             ColumnLayout {
                                 id: peerCol
                                 anchors.left: parent.left
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 8
-                                spacing: 2
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                spacing: 4
 
-                                Text {
-                                    text: model.name
-                                    color: theme.successSoft
-                                    font.pixelSize: 12
-                                    font.weight: Font.DemiBold
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        text: model.name
+                                        color: theme.successSoft
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                    }
+                                    Text {
+                                        text: "·"
+                                        color: theme.textMuted
+                                        font.pixelSize: 12
+                                        visible: capsRow.children.length > 0
+                                    }
+                                    Flow {
+                                        id: capsRow
+                                        Layout.fillWidth: true
+                                        spacing: 4
+
+                                        Repeater {
+                                            model: model.capsCsv
+                                                ? model.capsCsv.split(", ").filter(s => s.length)
+                                                : []
+                                            delegate: Rectangle {
+                                                radius: 3
+                                                color: Qt.rgba(0.49, 0.83, 0.39, 0.12)  // soft green tint
+                                                border.color: Qt.rgba(0.49, 0.83, 0.39, 0.4)
+                                                border.width: 1
+                                                implicitWidth: capLabel.implicitWidth + 10
+                                                implicitHeight: capLabel.implicitHeight + 4
+                                                Text {
+                                                    id: capLabel
+                                                    anchors.centerIn: parent
+                                                    text: modelData
+                                                    color: theme.successSoft
+                                                    font.pixelSize: 9
+                                                    font.weight: Font.Medium
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 Text {
-                                    text: "caps: " + (model.capabilities || []).join(", ")
-                                    color: theme.textSecondary
-                                    font.pixelSize: 10
-                                }
-                                Text {
-                                    text: root.shorten(model.agent_id || "", 32)
+                                    text: model.agent_id
                                     color: theme.textMuted
                                     font.pixelSize: 10
                                     font.family: "monospace"
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
                                 }
                             }
                         }
@@ -732,67 +803,168 @@ Item {
                         }
                     }
 
-                    DarkPrimaryButton {
-                        text: delegateBusy ? "Delegating…" : "Delegate"
-                        enabled: !delegateBusy && delegateCap.text.length > 0
-                                 && delegateText.text.length > 0
-                        property bool delegateBusy: false
+                    // Delegate row — primary action + reply attribution
+                    // beside it once a result lands.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spaceMedium
 
-                        onClicked: {
-                            delegateBusy = true;
-                            delegateResult.text = "Working…";
-                            delegateCidLink.text = "";
-                            // Synchronous IPC — Logos's RPC layer marshals
-                            // this off the QML thread. Can take 5-25 s
-                            // depending on network conditions.
-                            const raw = logos.callModule("agent", "delegate",
-                                                         [delegateCap.text, delegateText.text]);
-                            const obj = root.parseModuleJson(raw);
-                            delegateBusy = false;
+                        DarkPrimaryButton {
+                            id: delegateBtn
+                            text: delegateBusy ? "Delegating…" : "Delegate"
+                            enabled: !delegateBusy && delegateCap.text.length > 0
+                                     && delegateText.text.length > 0
+                            property bool delegateBusy: false
+                            property double t0: 0
 
-                            if (!obj || obj.error) {
-                                delegateResult.text = "Error: " +
-                                    (obj && obj.error ? obj.error : "no response");
-                                return;
+                            onClicked: {
+                                delegateBusy = true;
+                                t0 = Date.now();
+                                replyAgent.text = "";
+                                replyMeta.text = "";
+                                delegateResult.text = "";
+                                delegateCidChip.cid = "";
+                                delegateResult.color = theme.text;
+
+                                // Synchronous IPC — Logos's RPC layer marshals
+                                // this off the QML thread. Can take 5-30 s
+                                // depending on network conditions.
+                                const raw = logos.callModule("agent", "delegate",
+                                                             [delegateCap.text, delegateText.text]);
+                                const obj = root.parseModuleJson(raw);
+                                delegateBusy = false;
+                                const elapsedMs = Date.now() - t0;
+
+                                if (!obj || obj.error) {
+                                    delegateResult.color = theme.error;
+                                    delegateResult.text = "Error: " +
+                                        (obj && obj.error ? obj.error : "no response");
+                                    return;
+                                }
+                                const results = obj.results || [];
+                                if (results.length === 0) {
+                                    delegateResult.color = theme.warning;
+                                    delegateResult.text = "No matching peer responded.";
+                                    return;
+                                }
+                                const r = results[0];
+                                if (!r.success) {
+                                    delegateResult.color = theme.error;
+                                    delegateResult.text = "Failed: " + (r.error || "unknown error");
+                                    return;
+                                }
+
+                                replyAgent.text = root.shorten(r.agent_id || "?", 16);
+                                replyMeta.text  = "in " + (elapsedMs / 1000).toFixed(1) + " s";
+
+                                // Strip the trailing "execution log: codex://CID"
+                                // tail from the response body so it doesn't
+                                // duplicate the chip below; surface the CID
+                                // separately as an actionable chip.
+                                let body = r.result_text || "(empty)";
+                                const m = body.match(/codex:\/\/([A-Za-z0-9]+)/);
+                                if (m) {
+                                    delegateCidChip.cid = m[1];
+                                    body = body.replace(/\s*[-]+\s*execution log:\s*codex:\/\/[A-Za-z0-9]+\s*$/, "");
+                                }
+                                delegateResult.color = theme.text;
+                                delegateResult.text = body.trim();
                             }
-                            const results = obj.results || [];
-                            if (results.length === 0) {
-                                delegateResult.text = "No matching peer responded.";
-                                return;
+                        }
+
+                        Text {
+                            visible: replyAgent.text.length > 0
+                            text: "← reply from"
+                            color: theme.textSecondary
+                            font.pixelSize: theme.fontSmall
+                        }
+                        Text {
+                            id: replyAgent
+                            color: theme.successSoft
+                            font.pixelSize: theme.fontSmall
+                            font.family: "monospace"
+                        }
+                        Text {
+                            id: replyMeta
+                            color: theme.textMuted
+                            font.pixelSize: theme.fontSmall
+                        }
+                        Item { Layout.fillWidth: true }
+
+                        // CID chip — only visible when the response carried
+                        // an audit log. Click loads it into the Audit pane.
+                        Rectangle {
+                            id: delegateCidChip
+                            property string cid: ""
+                            visible: cid.length > 0
+                            radius: theme.radiusSmall
+                            color: Qt.rgba(0.475, 0.753, 1, 0.12)  // info-tinted
+                            border.color: theme.info
+                            border.width: 1
+                            implicitWidth: cidLabel.implicitWidth + 16
+                            implicitHeight: theme.controlHeight - 6
+                            Text {
+                                id: cidLabel
+                                anchors.centerIn: parent
+                                text: "codex://" + root.shorten(parent.cid, 14) + "  ↗"
+                                color: theme.info
+                                font.pixelSize: theme.fontSmall
+                                font.family: "monospace"
                             }
-                            const r = results[0];
-                            if (!r.success) {
-                                delegateResult.text = "Failed: " + (r.error || "unknown error");
-                                return;
-                            }
-                            delegateResult.text = r.result_text || "(empty)";
-                            // Pull a codex:// CID out of the result text if
-                            // present so the audit pane can grab it.
-                            const m = (r.result_text || "").match(/codex:\/\/([A-Za-z0-9]+)/);
-                            if (m) {
-                                delegateCidLink.text = m[1];
-                                cidInput.text = m[1];
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    cidInput.text = delegateCidChip.cid;
+                                    // Auto-fetch so the operator doesn't
+                                    // have to chase across the pane.
+                                    const raw = logos.callModule("agent",
+                                        "fetch_cid", [delegateCidChip.cid]);
+                                    const obj = root.parseModuleJson(raw);
+                                    if (!obj || obj.error) {
+                                        cidOut.text = "Error: " +
+                                            (obj && obj.error ? obj.error : "no response");
+                                        return;
+                                    }
+                                    try {
+                                        cidOut.text = atob(obj.payload_b64 || "");
+                                    } catch (e) {
+                                        cidOut.text = "(non-UTF-8 payload)";
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Text {
-                        id: delegateResult
+                    // Scrollable result panel — long summaries fit.
+                    Rectangle {
                         Layout.fillWidth: true
-                        text: "Result will appear here."
-                        color: theme.successSoft
-                        font.pixelSize: 12
-                        wrapMode: Text.Wrap
-                    }
-                    Text {
-                        id: delegateCidLink
-                        Layout.fillWidth: true
-                        text: ""
-                        visible: text.length > 0
-                        color: theme.info
-                        font.pixelSize: 10
-                        font.family: "monospace"
-                        wrapMode: Text.Wrap
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 90
+                        color: theme.backgroundElevated
+                        border.color: theme.border
+                        border.width: 1
+                        radius: theme.radiusMedium
+
+                        ScrollView {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            clip: true
+                            TextArea {
+                                id: delegateResult
+                                readOnly: true
+                                placeholderText: "Result will appear here."
+                                placeholderTextColor: theme.textMuted
+                                wrapMode: TextArea.Wrap
+                                color: theme.text
+                                font.pixelSize: theme.fontBody
+                                selectionColor: theme.primary
+                                selectedTextColor: theme.text
+                                background: Item {}
+                                padding: theme.spaceSmall
+                                text: ""
+                            }
+                        }
                     }
                 }
             }
