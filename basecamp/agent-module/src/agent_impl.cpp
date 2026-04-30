@@ -219,7 +219,12 @@ namespace {
 /// frame, read the length-prefixed JSON response frame, return its raw
 /// JSON bytes. Mirrors the Rust-side framing in
 /// `crates/logos-messaging-a2a-cli/src/daemon/`.
-QString sendRequest(const QString& socketPath, const QJsonObject& request) {
+///
+/// `readTimeoutMs` lets slow-path callers (storage fetches that walk
+/// the Codex DHT, delegations that wait on a worker model) override
+/// the default 30 s read window.
+QString sendRequest(const QString& socketPath, const QJsonObject& request,
+                    int readTimeoutMs = 30'000) {
     QLocalSocket sock;
     sock.connectToServer(socketPath);
     if (!sock.waitForConnected(5'000)) {
@@ -244,7 +249,7 @@ QString sendRequest(const QString& socketPath, const QJsonObject& request) {
     }
 
     while (sock.bytesAvailable() < 4) {
-        if (!sock.waitForReadyRead(30'000)) {
+        if (!sock.waitForReadyRead(readTimeoutMs)) {
             return errorJson(QStringLiteral("read len timed out: %1").arg(sock.errorString()));
         }
     }
@@ -259,7 +264,7 @@ QString sendRequest(const QString& socketPath, const QJsonObject& request) {
 
     QByteArray respBody;
     while (respBody.size() < static_cast<int>(respLen)) {
-        if (sock.bytesAvailable() == 0 && !sock.waitForReadyRead(30'000)) {
+        if (sock.bytesAvailable() == 0 && !sock.waitForReadyRead(readTimeoutMs)) {
             return errorJson(QStringLiteral("read body timed out: %1").arg(sock.errorString()));
         }
         respBody.append(sock.read(static_cast<int>(respLen) - respBody.size()));
@@ -267,10 +272,11 @@ QString sendRequest(const QString& socketPath, const QJsonObject& request) {
     return QString::fromUtf8(respBody);
 }
 
-QString simpleRequest(const QString& socketPath, const QString& kind) {
+QString simpleRequest(const QString& socketPath, const QString& kind,
+                      int readTimeoutMs = 30'000) {
     QJsonObject obj;
     obj["kind"] = kind;
-    return sendRequest(socketPath, obj);
+    return sendRequest(socketPath, obj, readTimeoutMs);
 }
 
 } // namespace
@@ -300,10 +306,16 @@ std::string AgentImpl::delegate(const std::string& capability,
     req["text"] = QString::fromStdString(text);
     req["parent_id"] = QStringLiteral("basecamp-%1")
                            .arg(QDateTime::currentMSecsSinceEpoch());
-    req["timeout_secs"] = 25;
+    // Worker-response poll timeout. A summarizer running Qwen3.5-4B
+    // against a URL prompt routinely sits at 30-50 s of inference; 25 s
+    // surfaced as "delegation timed out" too often. 60 s gives the
+    // model room to think while still bounding the wait.
+    req["timeout_secs"] = 60;
     req["broadcast"] = false;
     req["strategy"] = QJsonValue::Null;
-    return sendRequest(m_state->socketPath, req).toStdString();
+    // IPC envelope must outlast the daemon's internal poll so the
+    // timeout response itself doesn't get clipped. 90 s.
+    return sendRequest(m_state->socketPath, req, 90'000).toStdString();
 }
 
 std::string AgentImpl::send_task(const std::string& recipient_pubkey,
@@ -321,7 +333,11 @@ std::string AgentImpl::fetch_cid(const std::string& cid) {
     QJsonObject req;
     req["kind"] = "storage_fetch";
     req["cid"] = QString::fromStdString(cid);
-    return sendRequest(m_state->socketPath, req).toStdString();
+    // Codex CID resolution can walk the DHT for tens of seconds when
+    // the content is on a remote node — give the IPC a 90 s ceiling
+    // so a slow first fetch doesn't surface as "Socket operation
+    // timed out" to the operator.
+    return sendRequest(m_state->socketPath, req, 90'000).toStdString();
 }
 
 std::string AgentImpl::trust_list() {

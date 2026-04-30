@@ -538,7 +538,14 @@ Item {
 
             DarkTab { text: "Network" }
             DarkTab { text: "Trust" }
+            DarkTab { text: "History" }
         }
+
+        // Task history — in-memory across the session. Each successful
+        // delegation appends a row; each row remembers the inputs and
+        // the response so the operator can pick an old task and run it
+        // again or follow up.
+        ListModel { id: historyModel }
 
         StackLayout {
             id: tabStack
@@ -863,12 +870,51 @@ Item {
                                 // separately as an actionable chip.
                                 let body = r.result_text || "(empty)";
                                 const m = body.match(/codex:\/\/([A-Za-z0-9]+)/);
+                                let cid = "";
                                 if (m) {
-                                    delegateCidChip.cid = m[1];
+                                    cid = m[1];
+                                    delegateCidChip.cid = cid;
                                     body = body.replace(/\s*[-]+\s*execution log:\s*codex:\/\/[A-Za-z0-9]+\s*$/, "");
+                                    // Background pre-fetch: kick off the
+                                    // download so the daemon's libstorage
+                                    // has the bytes locally cached. The
+                                    // response is discarded; the side-
+                                    // effect (Codex repo populated) is
+                                    // what we want — clicking the chip
+                                    // later resolves from cache instantly.
+                                    cidPrefetchTimer.cid = cid;
+                                    cidPrefetchTimer.start();
                                 }
+                                const trimmedBody = body.trim();
                                 delegateResult.color = theme.text;
-                                delegateResult.text = body.trim();
+                                delegateResult.text = trimmedBody;
+
+                                // Append to history.
+                                historyModel.insert(0, {
+                                    ts: new Date().toISOString(),
+                                    capability: delegateCap.text,
+                                    text: delegateText.text,
+                                    agent_id: r.agent_id || "",
+                                    body: trimmedBody,
+                                    cid: cid,
+                                    elapsedSecs: (elapsedMs / 1000).toFixed(1)
+                                });
+                            }
+                        }
+
+                        // Fires once, ~50 ms after a successful delegation,
+                        // so the synchronous IPC for the actual delegate()
+                        // returns first and the operator sees the response
+                        // before any prefetch latency. Body is discarded —
+                        // we just want libstorage's local Codex repo warm.
+                        Timer {
+                            id: cidPrefetchTimer
+                            property string cid: ""
+                            interval: 50
+                            repeat: false
+                            onTriggered: {
+                                if (cid.length === 0) return;
+                                logos.callModule("agent", "fetch_cid", [cid]);
                             }
                         }
 
@@ -1270,6 +1316,253 @@ Item {
                     text: "Error: " + trustCol.trustError
                     color: theme.error
                     font.pixelSize: 11
+                }
+            }
+        }
+
+        // ── History tab ────────────────────────────────────────
+        // In-memory log of every successful delegation this session.
+        // Click a row to repopulate the Delegate form (capability +
+        // task text) and jump back to the Network tab — useful for
+        // re-running a task or sending a follow-up.
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: theme.backgroundSecondary
+            radius: 6
+            border.color: theme.border
+            border.width: 1
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "Task history (this session)"
+                        color: theme.text
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: historyModel.count + " tasks"
+                        color: theme.textSecondary
+                        font.pixelSize: 11
+                    }
+                    DarkButton {
+                        text: "Clear"
+                        enabled: historyModel.count > 0
+                        onClicked: historyModel.clear()
+                    }
+                }
+
+                ListView {
+                    id: historyList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 6
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    model: historyModel
+
+                    delegate: Rectangle {
+                        id: histRow
+                        property bool expanded: false
+                        width: ListView.view.width
+                        height: histCol.implicitHeight + 16
+                        color: histArea.containsMouse
+                            ? Qt.lighter(theme.backgroundElevated, 1.3)
+                            : theme.backgroundElevated
+                        radius: theme.radiusMedium
+                        border.color: histArea.containsMouse ? theme.primary : theme.borderSubtle
+                        border.width: 1
+
+                        Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+
+                        MouseArea {
+                            id: histArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: histRow.expanded = !histRow.expanded
+                        }
+
+                        ColumnLayout {
+                            id: histCol
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            anchors.topMargin: 8
+                            spacing: 4
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                Rectangle {
+                                    radius: 3
+                                    color: Qt.rgba(0.92, 0.48, 0.34, 0.15)
+                                    border.color: Qt.rgba(0.92, 0.48, 0.34, 0.4)
+                                    border.width: 1
+                                    implicitWidth: capPill.implicitWidth + 10
+                                    implicitHeight: capPill.implicitHeight + 4
+                                    Text {
+                                        id: capPill
+                                        anchors.centerIn: parent
+                                        text: model.capability
+                                        color: theme.primary
+                                        font.pixelSize: 9
+                                        font.weight: Font.Medium
+                                    }
+                                }
+                                Text {
+                                    text: "→ " + root.shorten(model.agent_id, 16)
+                                    color: theme.successSoft
+                                    font.pixelSize: 11
+                                    font.family: "monospace"
+                                }
+                                Text {
+                                    text: model.elapsedSecs + "s"
+                                    color: theme.textMuted
+                                    font.pixelSize: 11
+                                }
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    text: model.ts.split("T")[1].slice(0, 8) + "Z"
+                                    color: theme.textMuted
+                                    font.pixelSize: 10
+                                    font.family: "monospace"
+                                }
+                            }
+
+                            Text {
+                                text: model.text
+                                color: theme.text
+                                font.pixelSize: 12
+                                wrapMode: Text.Wrap
+                                elide: histRow.expanded ? Text.ElideNone : Text.ElideRight
+                                maximumLineCount: histRow.expanded ? 999 : 1
+                                Layout.fillWidth: true
+                            }
+
+                            // Expanded view: full response + actions
+                            ColumnLayout {
+                                visible: histRow.expanded
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: histResponse.implicitHeight + 16
+                                    Layout.maximumHeight: 180
+                                    color: theme.background
+                                    border.color: theme.borderSubtle
+                                    border.width: 1
+                                    radius: theme.radiusSmall
+
+                                    ScrollView {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        clip: true
+                                        TextArea {
+                                            id: histResponse
+                                            readOnly: true
+                                            text: model.body
+                                            color: theme.text
+                                            font.pixelSize: 11
+                                            wrapMode: TextArea.Wrap
+                                            background: Item {}
+                                            padding: 8
+                                            selectionColor: theme.primary
+                                            selectedTextColor: theme.text
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    DarkButton {
+                                        text: "Re-run"
+                                        onClicked: {
+                                            delegateCap.text = model.capability;
+                                            delegateText.text = model.text;
+                                            tabs.currentIndex = 0;
+                                            delegateText.forceActiveFocus();
+                                        }
+                                    }
+                                    DarkButton {
+                                        text: "Follow up"
+                                        onClicked: {
+                                            delegateCap.text = model.capability;
+                                            delegateText.text =
+                                                "Previous task:\n" + model.text +
+                                                "\n\nPrevious answer:\n" + model.body +
+                                                "\n\nFollow-up: ";
+                                            tabs.currentIndex = 0;
+                                            delegateText.forceActiveFocus();
+                                            delegateText.cursorPosition = delegateText.length;
+                                        }
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Rectangle {
+                                        visible: model.cid && model.cid.length > 0
+                                        radius: theme.radiusSmall
+                                        color: Qt.rgba(0.475, 0.753, 1, 0.12)
+                                        border.color: theme.info
+                                        border.width: 1
+                                        implicitWidth: histCidLabel.implicitWidth + 16
+                                        implicitHeight: theme.controlHeight - 6
+                                        Text {
+                                            id: histCidLabel
+                                            anchors.centerIn: parent
+                                            text: "codex://" + root.shorten(model.cid, 12) + "  ↗"
+                                            color: theme.info
+                                            font.pixelSize: theme.fontSmall
+                                            font.family: "monospace"
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                cidInput.text = model.cid;
+                                                tabs.currentIndex = 0;
+                                                const raw = logos.callModule("agent",
+                                                    "fetch_cid", [model.cid]);
+                                                const obj = root.parseModuleJson(raw);
+                                                if (!obj || obj.error) {
+                                                    cidOut.text = "Error: " +
+                                                        (obj && obj.error ? obj.error : "no response");
+                                                    return;
+                                                }
+                                                try {
+                                                    cidOut.text = atob(obj.payload_b64 || "");
+                                                } catch (e) {
+                                                    cidOut.text = "(non-UTF-8 payload)";
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    visible: historyModel.count === 0
+                    text: "No tasks yet — delegate something on the Network tab to populate this list."
+                    color: theme.textMuted
+                    font.pixelSize: 11
+                    font.italic: true
+                    Layout.alignment: Qt.AlignHCenter
                 }
             }
         }
