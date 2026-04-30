@@ -96,14 +96,19 @@ run_agent_bg() {
 }
 
 # Default executors: simple sed-based stubs that prefix the task text so
-# different agents produce visibly different responses. Swap in a real
-# coding agent (e.g. Goose against a local Ollama model) by exporting:
+# different agents produce visibly different responses without needing a
+# model running. Swap in a real coding agent (Goose against a local
+# OpenAI-compatible inference endpoint, lemonade, vLLM, Ollama, etc.) by
+# exporting paths to the bundled wrapper:
 #
-#   export LMAO_DEMO_ALICE_EXEC='goose run --no-session -i - --output-format text --quiet'
-#   export LMAO_DEMO_BOB_EXEC='goose run --no-session -i - --output-format text --quiet'
+#   export LMAO_DEMO_ALICE_EXEC="$(pwd)/scripts/goose-with-audit.sh"
+#   export LMAO_DEMO_BOB_EXEC="$(pwd)/scripts/goose-with-audit.sh"
 #
-# These recipes assume `~/.config/goose/config.yaml` is configured for an
-# Ollama provider and a model that's already pulled locally.
+# `goose-with-audit.sh` runs goose with the user's existing
+# `~/.config/goose/config.yaml` (provider/model/host) and writes the
+# task input + model output to stderr so `lmao agent run` has something
+# real to upload as the per-task audit log. (Goose --quiet writes
+# nothing to stderr by design.) Set GOOSE_BIN if `goose` isn't on PATH.
 ALICE_EXEC="${LMAO_DEMO_ALICE_EXEC:-sh -c 'echo summarizer-stderr-line >&2; sed s/^/[summarized]\ /'}"
 BOB_EXEC="${LMAO_DEMO_BOB_EXEC:-sh -c 'echo reviewer-stderr-line >&2; sed s/^/[reviewed]\ \ \ /'}"
 

@@ -48,14 +48,30 @@ once both agents have joined the gossip mesh.
 **Run** (once before the demo):
 
 ```bash
-export LMAO_DEMO_ALICE_EXEC='goose run --no-session -i - --output-format text --quiet'
-export LMAO_DEMO_BOB_EXEC='goose run --no-session -i - --output-format text --quiet'
+export LMAO_DEMO_ALICE_EXEC="$(pwd)/scripts/goose-with-audit.sh"
+export LMAO_DEMO_BOB_EXEC="$(pwd)/scripts/goose-with-audit.sh"
 ```
 
 **Say**: "Each agent runs an executor — any process that takes the task
 on stdin and prints the answer on stdout. We're using Goose because it
 ships with tool-use out of the box, but anything OpenAI-compatible works
-— `llm`, `aider`, a shell script, whatever."
+— `llm`, `aider`, a shell script, whatever. The bundled
+`goose-with-audit.sh` wrapper just makes sure the model's input and
+output land on stderr too, so the agent has a meaningful transcript to
+upload as the per-task audit log on Codex."
+
+The wrapper assumes Goose is configured (`~/.config/goose/config.yaml`
+points at an OpenAI-compatible endpoint). For lemonade-server / vLLM /
+LM Studio the config block is:
+
+```yaml
+GOOSE_PROVIDER: openai
+GOOSE_MODEL: <model-id>            # what `/v1/models` returns
+GOOSE_MODE: auto                   # required for headless tool use
+OPENAI_HOST: http://<host>:<port>
+OPENAI_BASE_PATH: v1/chat/completions
+OPENAI_TIMEOUT: 600
+```
 
 If Goose isn't available in the room, **leave the env unset** —
 `scripts/demo.sh` falls back to a `sed` stub that visibly tags responses
