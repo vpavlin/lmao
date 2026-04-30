@@ -40,10 +40,47 @@ Item {
     property bool   statusStorageEnabled: false
     property string statusError: ""
 
+    // Tri-state badge: "offline" | "starting" | "ready". Read cheaply
+    // from the agent module via daemon_state() — no IPC round-trip.
+    property string daemonState: "offline"
+
     function refreshStatus() {
+        // Local-only liveness check first. While starting/offline, skip
+        // the info() IPC entirely so we don't block the QML thread on a
+        // 5 s waitForConnected against a socket that doesn't exist yet.
+        const stateRaw = logos.callModule("agent", "daemon_state", []);
+        const stateObj = parseModuleJson(stateRaw);
+        const next = (stateObj && typeof stateObj === "string")
+            ? stateObj
+            : (stateRaw || "").replace(/"/g, "").trim();
+        // The daemon_state Q_INVOKABLE returns a bare std::string,
+        // which the universal-module bridge wraps as a JSON-encoded
+        // string. Strip quotes if present.
+        daemonState = (next === "ready" || next === "starting" || next === "offline")
+            ? next : "offline";
+
+        if (daemonState !== "ready") {
+            statusError = daemonState === "starting"
+                ? "daemon starting…"
+                : "daemon offline";
+            // Clear stale identity fields so we don't show last-known
+            // values for a daemon that's no longer up.
+            if (daemonState === "offline") {
+                statusName = "";
+                statusPubkey = "";
+                statusCapabilities = [];
+                statusUptimeSecs = 0;
+                statusStorageEnabled = false;
+            }
+            return;
+        }
+
         const raw = logos.callModule("agent", "info", []);
         const obj = parseModuleJson(raw);
         if (!obj || obj.error) {
+            // Daemon claimed ready locally but IPC errored — flip back
+            // to a transient "starting" while the operator waits for
+            // the next refresh.
             statusError = obj && obj.error ? obj.error : "no response";
             return;
         }
@@ -58,11 +95,22 @@ Item {
     Component.onCompleted: {
         refreshStatus();
         statusTimer.start();
+        // Faster poll while the daemon is starting up — the operator
+        // sees the badge flip to "ready" within a second or two of the
+        // socket appearing rather than waiting for the next 5 s tick.
+        startingPollTimer.start();
     }
     Timer {
         id: statusTimer
         interval: 5000
         repeat: true
+        onTriggered: root.refreshStatus()
+    }
+    Timer {
+        id: startingPollTimer
+        interval: 1000
+        repeat: true
+        running: root.daemonState === "starting"
         onTriggered: root.refreshStatus()
     }
 
@@ -119,13 +167,28 @@ Item {
                     }
                 }
 
-                // Status badge
+                // Status badge — three states. Starting pulses so the
+                // operator can see the daemon is dialling the mesh
+                // rather than dead.
                 Rectangle {
+                    id: statusBadge
                     Layout.preferredWidth: badge.implicitWidth + 16
                     Layout.preferredHeight: 24
                     radius: 12
-                    color: root.statusError ? "#572421" : "#1a3f2e"
-                    border.color: root.statusError ? "#f85149" : "#56d364"
+
+                    readonly property color tintReady:    "#1a3f2e"
+                    readonly property color tintStarting: "#3a2d10"
+                    readonly property color tintOffline:  "#572421"
+                    readonly property color edgeReady:    "#56d364"
+                    readonly property color edgeStarting: "#f0883e"
+                    readonly property color edgeOffline:  "#f85149"
+
+                    color: root.daemonState === "ready"   ? tintReady
+                         : root.daemonState === "starting" ? tintStarting
+                         : tintOffline
+                    border.color: root.daemonState === "ready"   ? edgeReady
+                                : root.daemonState === "starting" ? edgeStarting
+                                : edgeOffline
                     border.width: 1
 
                     Row {
@@ -133,17 +196,35 @@ Item {
                         anchors.centerIn: parent
                         spacing: 6
 
+                        // Dot. Pulses while starting via the
+                        // SequentialAnimation below.
                         Rectangle {
+                            id: badgeDot
                             width: 8; height: 8; radius: 4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: root.statusError ? "#f85149" : "#56d364"
+                            color: statusBadge.border.color
+                            opacity: 1.0
                         }
                         Text {
-                            text: root.statusError ? "daemon offline" : "daemon ready"
-                            color: root.statusError ? "#f85149" : "#56d364"
+                            text: root.daemonState === "ready"   ? "daemon ready"
+                                : root.daemonState === "starting" ? "daemon starting"
+                                : "daemon offline"
+                            color: statusBadge.border.color
                             font.pixelSize: 11
                             anchors.verticalCenter: parent.verticalCenter
                         }
+                    }
+
+                    // Pulse animation — runs only while daemonState is
+                    // "starting" so a steady ready/offline indicator
+                    // doesn't flicker.
+                    SequentialAnimation on opacity {
+                        running: root.daemonState === "starting"
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1.0; to: 0.45; duration: 700; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 0.45; to: 1.0; duration: 700; easing.type: Easing.InOutQuad }
+                        // Reset on stop so ready/offline aren't dimmed.
+                        onRunningChanged: if (!running) statusBadge.opacity = 1.0
                     }
                 }
             }

@@ -54,6 +54,17 @@ public:
     /// is reachable.
     bool is_running();
 
+    /// Local liveness probe — no IPC round-trip. Returns one of:
+    ///   - `"ready"`    daemon socket has appeared and the agent is
+    ///                  accepting IPC.
+    ///   - `"starting"` subprocess spawned, still dialing the mesh /
+    ///                  binding the socket. Typically lasts 10-20 s
+    ///                  on a cold start.
+    ///   - `"offline"`  subprocess never started or exited.
+    /// Used by the QML status timer to render a tri-state badge
+    /// without paying the IPC cost while the daemon is still booting.
+    std::string daemon_state();
+
     /// Snapshot the daemon's friend-keyring trust list. Returns the
     /// JSON daemon response: `{kind: "trust_list", mode, entries: […],
     /// trust_file?}`.

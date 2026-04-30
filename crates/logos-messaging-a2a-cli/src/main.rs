@@ -30,6 +30,19 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Die when the parent process dies. Without this, when a host (e.g.
+    // Basecamp's logos_host) gets `kill -9`'d before its destructor can
+    // tear down our QProcess child cleanly, the lmao subprocess is
+    // orphaned and keeps holding its libp2p ports — blocking the next
+    // launch with "Address already in use". Linux only; harmless on
+    // other platforms (NOP).
+    #[cfg(target_os = "linux")]
+    unsafe {
+        // PR_SET_PDEATHSIG = 1, SIGTERM = 15. Posix const not in libc
+        // crate's stable surface, hard-coded values are fine here.
+        libc::prctl(1 /* PR_SET_PDEATHSIG */, 15 /* SIGTERM */, 0, 0, 0);
+    }
+
     let cli = Cli::parse();
     let json = cli.json;
     let identity = IdentityConfig {

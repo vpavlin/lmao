@@ -379,3 +379,14 @@ bool AgentImpl::is_running() {
         && m_state->process.state() == QProcess::Running
         && QFileInfo::exists(m_state->socketPath);
 }
+
+std::string AgentImpl::daemon_state() {
+    if (m_state->started.load(std::memory_order_acquire)
+        && m_state->process.state() == QProcess::Running) {
+        return "ready";
+    }
+    if (m_state->process.state() == QProcess::Running) {
+        return "starting";
+    }
+    return "offline";
+}

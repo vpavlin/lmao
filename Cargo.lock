@@ -2126,6 +2126,7 @@ dependencies = [
  "clap_complete",
  "hex",
  "k256",
+ "libc",
  "logos-messaging-a2a-core",
  "logos-messaging-a2a-crypto",
  "logos-messaging-a2a-node",
