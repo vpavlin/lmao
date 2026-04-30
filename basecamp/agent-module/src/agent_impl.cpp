@@ -99,11 +99,23 @@ AgentImpl::AgentImpl() : m_state(new State) {
     m_state->socketPath = socketPathFor(QCoreApplication::applicationPid());
     QFile::remove(m_state->socketPath);
 
+    // Port selection. The default logos-delivery TCP port (60000) clashes
+    // with at least VS Code's local language-server socket on this
+    // operator's machine, so we pick a less-trafficked range by default
+    // and let env vars override per-instance when running multiple
+    // Basecamps side by side.
+    const QString tcpPort     = qEnvironmentVariable("LMAO_AGENT_TCP_PORT",     "60500");
+    const QString udpPort     = qEnvironmentVariable("LMAO_AGENT_UDP_PORT",     "9500");
+    const QString storagePort = qEnvironmentVariable("LMAO_AGENT_STORAGE_PORT", "19500");
+
     QStringList args;
     args << "--daemon-socket"     << m_state->socketPath
          << "--transport"         << "logos-delivery"
+         << "--tcp-port"          << tcpPort
+         << "--udp-port"          << udpPort
          << "--storage"           << "libstorage"
          << "--storage-data-dir"  << QDir::homePath() + "/.local/share/lmao/storage"
+         << "--storage-port"      << storagePort
          << "agent" << "run"
          << "--name"              << "basecamp"
          << "--capabilities"      << "text"
