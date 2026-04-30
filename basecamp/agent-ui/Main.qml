@@ -494,6 +494,62 @@ Item {
             }
         }
 
+        // ── Tabs (Network / Trust) ─────────────────────────────
+        // Network is the main flow (peers, delegate, audit-log fetch).
+        // Trust gets its own tab so the friend-keyring pane doesn't eat
+        // 260 px of vertical space on every interaction.
+        TabBar {
+            id: tabs
+            Layout.fillWidth: true
+            background: Rectangle {
+                color: "transparent"
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width; height: 1
+                    color: theme.borderSubtle
+                }
+            }
+
+            component DarkTab: TabButton {
+                id: tab
+                height: 32
+                font.pixelSize: theme.fontBody
+                contentItem: Text {
+                    text: tab.text
+                    color: tab.checked ? theme.text : theme.textSecondary
+                    font: tab.font
+                    font.weight: tab.checked ? Font.Medium : Font.Normal
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: tab.checked ? theme.backgroundSecondary
+                         : tab.hovered ? Qt.rgba(1, 1, 1, 0.03)
+                                       : "transparent"
+                    Rectangle {
+                        // Active-tab indicator on the bottom edge.
+                        anchors.bottom: parent.bottom
+                        width: parent.width; height: 2
+                        color: tab.checked ? theme.primary : "transparent"
+                    }
+                }
+            }
+
+            DarkTab { text: "Network" }
+            DarkTab { text: "Trust" }
+        }
+
+        StackLayout {
+            id: tabStack
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: tabs.currentIndex
+
+        // ── Network tab ────────────────────────────────────────
+        ColumnLayout {
+            spacing: 12
+
         // ── Pane 2 + 3 side by side ────────────────────────────
         RowLayout {
             Layout.fillWidth: true
@@ -742,15 +798,96 @@ Item {
             }
         }
 
-        // ── Pane 4: Trust ──────────────────────────────────────
-        // Bounded height: the Peers + Delegate row above uses
-        // `Layout.fillHeight: true` and gets squeezed if Trust requests
-        // implicitHeight. Cap to ~260 px so this pane stays visible
-        // without crowding out the panes above it. The peer list inside
-        // is scrollable, so longer trust lists still work.
+        // ── Audit pane (inside Network tab, below Peers+Delegate) ──
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 260
+            Layout.preferredHeight: 130
+            color: theme.backgroundSecondary
+            radius: 6
+            border.color: theme.border
+            border.width: 1
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 6
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    Text {
+                        text: "Audit log fetch"
+                        color: theme.text
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+                    DarkTextField {
+                        id: cidInput
+                        placeholderText: "codex://CID (paste here)"
+                        Layout.fillWidth: true
+                    }
+                    DarkPrimaryButton {
+                        text: "Fetch"
+                        enabled: cidInput.text.length > 0
+                        onClicked: {
+                            // Tolerate the codex:// prefix.
+                            const cid = cidInput.text.replace(/^codex:\/\//, "");
+                            const raw = logos.callModule("agent", "fetch_cid", [cid]);
+                            const obj = root.parseModuleJson(raw);
+                            if (!obj || obj.error) {
+                                cidOut.text = "Error: " + (obj && obj.error ? obj.error : "no response");
+                                return;
+                            }
+                            // Decode base64 into UTF-8 best-effort.
+                            try {
+                                const decoded = atob(obj.payload_b64 || "");
+                                cidOut.text = decoded;
+                            } catch (e) {
+                                cidOut.text = "(non-UTF-8 payload, " + (obj.payload_b64 || "").length + " base64 chars)";
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: theme.backgroundElevated
+                    border.color: theme.border
+                    border.width: 1
+                    radius: theme.radiusMedium
+
+                    ScrollView {
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        clip: true
+                        TextArea {
+                            id: cidOut
+                            readOnly: true
+                            placeholderText: "Fetched payload appears here."
+                            placeholderTextColor: theme.textMuted
+                            wrapMode: TextArea.Wrap
+                            color: theme.text
+                            font.family: "monospace"
+                            font.pixelSize: theme.fontSmall
+                            selectionColor: theme.primary
+                            selectedTextColor: theme.text
+                            background: Item {}
+                            padding: theme.spaceSmall
+                        }
+                    }
+                }
+            }
+        }
+        } // end Network tab ColumnLayout
+
+        // ── Trust tab ──────────────────────────────────────────
+        // Friend-keyring management. Now its own tab so the list
+        // doesn't eat 260 px of the main flow.
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             color: theme.backgroundSecondary
             radius: 6
             border.color: theme.border
@@ -964,88 +1101,6 @@ Item {
                 }
             }
         }
-
-        // ── Pane 5: Audit ──────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 130
-            color: theme.backgroundSecondary
-            radius: 6
-            border.color: theme.border
-            border.width: 1
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 12
-                spacing: 6
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Text {
-                        text: "Audit log fetch"
-                        color: theme.text
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
-                        Layout.fillWidth: true
-                    }
-                    DarkTextField {
-                        id: cidInput
-                        placeholderText: "codex://CID (paste here)"
-                        Layout.fillWidth: true
-                    }
-                    DarkPrimaryButton {
-                        text: "Fetch"
-                        enabled: cidInput.text.length > 0
-                        onClicked: {
-                            // Tolerate the codex:// prefix.
-                            const cid = cidInput.text.replace(/^codex:\/\//, "");
-                            const raw = logos.callModule("agent", "fetch_cid", [cid]);
-                            const obj = root.parseModuleJson(raw);
-                            if (!obj || obj.error) {
-                                cidOut.text = "Error: " + (obj && obj.error ? obj.error : "no response");
-                                return;
-                            }
-                            // Decode base64 into UTF-8 best-effort.
-                            try {
-                                const decoded = atob(obj.payload_b64 || "");
-                                cidOut.text = decoded;
-                            } catch (e) {
-                                cidOut.text = "(non-UTF-8 payload, " + (obj.payload_b64 || "").length + " base64 chars)";
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: theme.backgroundElevated
-                    border.color: theme.border
-                    border.width: 1
-                    radius: theme.radiusMedium
-
-                    ScrollView {
-                        anchors.fill: parent
-                        anchors.margins: 1
-                        clip: true
-                        TextArea {
-                            id: cidOut
-                            readOnly: true
-                            placeholderText: "Fetched payload appears here."
-                            placeholderTextColor: theme.textMuted
-                            wrapMode: TextArea.Wrap
-                            color: theme.text
-                            font.family: "monospace"
-                            font.pixelSize: theme.fontSmall
-                            selectionColor: theme.primary
-                            selectedTextColor: theme.text
-                            background: Item {}
-                            padding: theme.spaceSmall
-                        }
-                    }
-                }
-            }
-        }
+        } // end StackLayout
     }
 }
