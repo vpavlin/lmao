@@ -14,11 +14,14 @@
 #include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QString>
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
+#include <random>
 #include <thread>
 
 namespace {
@@ -68,6 +71,18 @@ QString socketPathFor(qint64 pid) {
     return runtime + QStringLiteral("/lmao-basecamp-%1.sock").arg(pid);
 }
 
+/// Generate a 16-hex-char request id. Threadsafe, statistically
+/// unique enough for in-flight task tracking inside a single host.
+std::string newRequestId() {
+    static std::mt19937_64 gen{std::random_device{}()};
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+    char buf[17];
+    snprintf(buf, sizeof(buf), "%016llx",
+             (unsigned long long) std::uniform_int_distribution<uint64_t>{}(gen));
+    return std::string(buf);
+}
+
 } // namespace
 
 struct AgentImpl::State {
@@ -88,7 +103,7 @@ struct AgentImpl::State {
     std::thread waitThread;
 };
 
-AgentImpl::AgentImpl() : m_state(new State) {
+AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     m_state->lmaoBinary = resolveLmaoBinary();
     if (m_state->lmaoBinary.isEmpty()) {
         qWarning().noquote()
@@ -172,7 +187,7 @@ AgentImpl::AgentImpl() : m_state(new State) {
     // and return an error response until it flips, and the QML side's
     // 5 s status-refresh timer keeps retrying.
     const QString socketPath = m_state->socketPath;
-    State* state = m_state;
+    std::shared_ptr<State> state = m_state;
     m_state->waitThread = std::thread([state, socketPath]() {
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(SOCKET_WAIT_MS);
@@ -210,7 +225,10 @@ AgentImpl::~AgentImpl() {
         }
     }
     QFile::remove(m_state->socketPath);
-    delete m_state;
+    // m_state is shared_ptr — drops here. Any worker threads still
+    // running keep their own shared_ptr<State> reference; State stays
+    // alive until the last one exits. Workers check shuttingDown
+    // before emitting, so a destroyed AgentImpl won't fire bogus events.
 }
 
 namespace {
@@ -338,6 +356,146 @@ std::string AgentImpl::fetch_cid(const std::string& cid) {
     // so a slow first fetch doesn't surface as "Socket operation
     // timed out" to the operator.
     return sendRequest(m_state->socketPath, req, 90'000).toStdString();
+}
+
+// ── Async API ───────────────────────────────────────────────────
+//
+// Both `start_*` methods follow the same shape:
+//   1. Generate a request_id
+//   2. Spawn a detached worker thread that captures everything by
+//      value (shared_ptr<State> for the socket path + shutdown flag,
+//      std::function for emitEvent, plain strings for inputs)
+//   3. Worker runs the blocking IPC, packs the response into a JSON
+//      event payload, fires emitEvent if the host hasn't shut down
+//   4. Caller gets back the request_id immediately so the QML side
+//      can show a "running" placeholder
+//
+// Workers don't touch *this — only their captured State copy. If
+// AgentImpl is destroyed while a worker runs, State stays alive via
+// the worker's shared_ptr; the worker checks `state->shuttingDown`
+// before emitting, so destroyed callbacks aren't fired.
+
+std::string AgentImpl::start_delegate(const std::string& capability,
+                                      const std::string& text) {
+    if (!m_state->started.load(std::memory_order_acquire)) {
+        return errorJson("daemon not running").toStdString();
+    }
+    const std::string task_id = newRequestId();
+    auto state = m_state;
+    auto cb = emitEvent;
+    QString cap = QString::fromStdString(capability);
+    QString txt = QString::fromStdString(text);
+    QString taskIdQ = QString::fromStdString(task_id);
+
+    std::thread([state, cb, cap, txt, taskIdQ]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        QJsonObject req;
+        req["kind"]         = "task_delegate";
+        req["to"]           = QJsonValue::Null;
+        req["capability"]   = cap;
+        req["text"]         = txt;
+        req["parent_id"]    = QStringLiteral("basecamp-%1").arg(taskIdQ);
+        req["timeout_secs"] = 60;
+        req["broadcast"]    = false;
+        req["strategy"]     = QJsonValue::Null;
+
+        QString resp = sendRequest(state->socketPath, req, 90'000);
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+        QJsonObject event;
+        event["task_id"]    = taskIdQ;
+        event["elapsed_ms"] = (qint64)elapsedMs;
+
+        QJsonDocument doc = QJsonDocument::fromJson(resp.toUtf8());
+        if (doc.isObject()) {
+            QJsonObject obj = doc.object();
+            if (obj.contains("error")) {
+                event["success"] = false;
+                event["error"]   = obj["error"];
+            } else {
+                QJsonArray results = obj["results"].toArray();
+                if (results.isEmpty()) {
+                    event["success"] = false;
+                    event["error"]   = "no matching peer responded";
+                } else {
+                    QJsonObject r = results[0].toObject();
+                    event["success"]  = r["success"].toBool();
+                    event["agent_id"] = r["agent_id"];
+                    event["body"]     = r["result_text"];
+                    event["error"]    = r["error"];
+                    QString body = r["result_text"].toString();
+                    QRegularExpression re("codex://([A-Za-z0-9]+)");
+                    auto m = re.match(body);
+                    if (m.hasMatch()) {
+                        event["cid"] = m.captured(1);
+                    }
+                }
+            }
+        } else {
+            event["success"] = false;
+            event["error"]   = "unparseable response";
+        }
+
+        if (state->shuttingDown.load(std::memory_order_acquire)) return;
+        if (cb) {
+            QString json = QString::fromUtf8(
+                QJsonDocument(event).toJson(QJsonDocument::Compact));
+            cb("delegate_complete", json.toStdString());
+        }
+    }).detach();
+
+    QJsonObject ack;
+    ack["task_id"] = taskIdQ;
+    return QString::fromUtf8(QJsonDocument(ack).toJson(QJsonDocument::Compact)).toStdString();
+}
+
+std::string AgentImpl::start_fetch_cid(const std::string& cid) {
+    if (!m_state->started.load(std::memory_order_acquire)) {
+        return errorJson("daemon not running").toStdString();
+    }
+    const std::string request_id = newRequestId();
+    auto state = m_state;
+    auto cb = emitEvent;
+    QString cidQ = QString::fromStdString(cid);
+    QString reqIdQ = QString::fromStdString(request_id);
+
+    std::thread([state, cb, cidQ, reqIdQ]() {
+        QJsonObject req;
+        req["kind"] = "storage_fetch";
+        req["cid"]  = cidQ;
+        QString resp = sendRequest(state->socketPath, req, 90'000);
+
+        QJsonObject event;
+        event["request_id"] = reqIdQ;
+        event["cid"]        = cidQ;
+
+        QJsonDocument doc = QJsonDocument::fromJson(resp.toUtf8());
+        if (doc.isObject()) {
+            QJsonObject obj = doc.object();
+            if (obj.contains("error")) {
+                event["success"] = false;
+                event["error"]   = obj["error"];
+            } else {
+                event["success"]     = true;
+                event["payload_b64"] = obj["payload_b64"];
+            }
+        } else {
+            event["success"] = false;
+            event["error"]   = "unparseable response";
+        }
+
+        if (state->shuttingDown.load(std::memory_order_acquire)) return;
+        if (cb) {
+            QString json = QString::fromUtf8(
+                QJsonDocument(event).toJson(QJsonDocument::Compact));
+            cb("fetch_cid_complete", json.toStdString());
+        }
+    }).detach();
+
+    QJsonObject ack;
+    ack["request_id"] = reqIdQ;
+    return QString::fromUtf8(QJsonDocument(ack).toJson(QJsonDocument::Compact)).toStdString();
 }
 
 std::string AgentImpl::trust_list() {

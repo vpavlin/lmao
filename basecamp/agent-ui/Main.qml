@@ -326,6 +326,14 @@ Item {
         // sees the badge flip to "ready" within a second or two of the
         // socket appearing rather than waiting for the next 5 s tick.
         startingPollTimer.start();
+        // Subscribe to async-completion events from the agent module.
+        // Required before any start_delegate / start_fetch_cid call:
+        // the Logos QML bridge only forwards events the consumer has
+        // explicitly registered for.
+        if (typeof logos !== "undefined" && logos.onModuleEvent) {
+            logos.onModuleEvent("agent", "delegate_complete");
+            logos.onModuleEvent("agent", "fetch_cid_complete");
+        }
     }
     Timer {
         id: statusTimer
@@ -339,6 +347,87 @@ Item {
         repeat: true
         running: root.daemonState === "starting"
         onTriggered: root.refreshStatus()
+    }
+
+    // ── Async event dispatcher ───────────────────────────────────
+    // The C++ module's `start_delegate` and `start_fetch_cid` return
+    // immediately with a request_id; the actual IPC runs on a worker
+    // thread and fires `<name>_complete` events here when done. Each
+    // event carries a JSON payload (wrapped as data[0] by the
+    // universal-module bridge); we route by event name and update the
+    // tasksModel by task_id / cid.
+    Connections {
+        target: logos
+        ignoreUnknownSignals: true
+        function onModuleEventReceived(moduleName, eventName, data) {
+            if (moduleName !== "agent") return;
+            const raw = (data && data.length > 0)
+                ? (typeof data[0] === "string" ? data[0] : JSON.stringify(data[0]))
+                : "";
+            const obj = root.parseModuleJson(raw);
+            if (!obj) return;
+            if (eventName === "delegate_complete") {
+                root.handleDelegateComplete(obj);
+            } else if (eventName === "fetch_cid_complete") {
+                root.handleFetchCidComplete(obj);
+            }
+        }
+    }
+
+    // Tasks: a single ListModel for both running and completed
+    // delegations. Each row carries everything the UI needs to render
+    // it; index 0 is newest. tasks.list and the Network-tab ListView
+    // share this model.
+    ListModel { id: tasksModel }
+
+    function handleDelegateComplete(obj) {
+        if (!obj.task_id) return;
+        for (let i = 0; i < tasksModel.count; i++) {
+            if (tasksModel.get(i).task_id !== obj.task_id) continue;
+
+            let body = obj.body || "";
+            // Strip the trailing "execution log: codex://..." footer
+            // — surfaced separately as a CID chip.
+            body = body.replace(/\s*[-]+\s*execution log:\s*codex:\/\/[A-Za-z0-9]+\s*$/, "");
+
+            tasksModel.setProperty(i, "status",
+                obj.success ? "done" : "error");
+            tasksModel.setProperty(i, "agent_id", obj.agent_id || "");
+            tasksModel.setProperty(i, "body", body.trim());
+            tasksModel.setProperty(i, "cid", obj.cid || "");
+            tasksModel.setProperty(i, "elapsedSecs",
+                ((obj.elapsed_ms || 0) / 1000).toFixed(1));
+            tasksModel.setProperty(i, "error", obj.error || "");
+
+            // Auto-prefetch the audit log so it's locally cached when
+            // the operator clicks "View log".
+            if (obj.success && obj.cid) {
+                logos.callModule("agent", "start_fetch_cid", [obj.cid]);
+            }
+            return;
+        }
+    }
+
+    function handleFetchCidComplete(obj) {
+        if (!obj.cid) return;
+        let payload = "";
+        if (obj.success) {
+            try {
+                payload = atob(obj.payload_b64 || "");
+            } catch (e) {
+                payload = "(non-UTF-8 payload)";
+            }
+        } else {
+            payload = "Error: " + (obj.error || "fetch failed");
+        }
+        // Update every task that's waiting on this CID.
+        for (let i = 0; i < tasksModel.count; i++) {
+            const t = tasksModel.get(i);
+            if (t.cid === obj.cid) {
+                tasksModel.setProperty(i, "cidPayload", payload);
+                tasksModel.setProperty(i, "cidLoading", false);
+            }
+        }
     }
 
     ColumnLayout {
@@ -538,14 +627,12 @@ Item {
 
             DarkTab { text: "Network" }
             DarkTab { text: "Trust" }
-            DarkTab { text: "History" }
         }
 
         // Task history — in-memory across the session. Each successful
         // delegation appends a row; each row remembers the inputs and
         // the response so the operator can pick an old task and run it
         // again or follow up.
-        ListModel { id: historyModel }
 
         StackLayout {
             id: tabStack
@@ -810,294 +897,381 @@ Item {
                         }
                     }
 
-                    // Delegate row — primary action + reply attribution
-                    // beside it once a result lands.
+                    // Delegate launcher — fire-and-forget. The
+                    // start_delegate IPC returns instantly with a
+                    // task_id; the work runs on a worker thread and
+                    // emits "delegate_complete" when done. Multiple
+                    // tasks can be in flight simultaneously.
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: theme.spaceMedium
 
                         DarkPrimaryButton {
                             id: delegateBtn
-                            text: delegateBusy ? "Delegating…" : "Delegate"
-                            enabled: !delegateBusy && delegateCap.text.length > 0
+                            text: "Delegate"
+                            enabled: delegateCap.text.length > 0
                                      && delegateText.text.length > 0
-                            property bool delegateBusy: false
-                            property double t0: 0
+                                     && root.daemonState === "ready"
 
                             onClicked: {
-                                delegateBusy = true;
-                                t0 = Date.now();
-                                replyAgent.text = "";
-                                replyMeta.text = "";
-                                delegateResult.text = "";
-                                delegateCidChip.cid = "";
-                                delegateResult.color = theme.text;
-
-                                // Synchronous IPC — Logos's RPC layer marshals
-                                // this off the QML thread. Can take 5-30 s
-                                // depending on network conditions.
-                                const raw = logos.callModule("agent", "delegate",
-                                                             [delegateCap.text, delegateText.text]);
-                                const obj = root.parseModuleJson(raw);
-                                delegateBusy = false;
-                                const elapsedMs = Date.now() - t0;
-
-                                if (!obj || obj.error) {
-                                    delegateResult.color = theme.error;
-                                    delegateResult.text = "Error: " +
-                                        (obj && obj.error ? obj.error : "no response");
+                                const ackRaw = logos.callModule("agent", "start_delegate",
+                                    [delegateCap.text, delegateText.text]);
+                                const ack = root.parseModuleJson(ackRaw);
+                                if (!ack || ack.error || !ack.task_id) {
+                                    // Surface the failure as a synthetic
+                                    // task card so the user sees something.
+                                    tasksModel.insert(0, {
+                                        task_id: "err-" + Date.now(),
+                                        status: "error",
+                                        capability: delegateCap.text,
+                                        text: delegateText.text,
+                                        agent_id: "",
+                                        body: "",
+                                        cid: "",
+                                        cidPayload: "",
+                                        cidLoading: false,
+                                        cidExpanded: false,
+                                        elapsedSecs: "0",
+                                        error: (ack && ack.error)
+                                            ? ack.error : "no task_id from agent",
+                                        startedAt: Date.now()
+                                    });
                                     return;
                                 }
-                                const results = obj.results || [];
-                                if (results.length === 0) {
-                                    delegateResult.color = theme.warning;
-                                    delegateResult.text = "No matching peer responded.";
-                                    return;
-                                }
-                                const r = results[0];
-                                if (!r.success) {
-                                    delegateResult.color = theme.error;
-                                    delegateResult.text = "Failed: " + (r.error || "unknown error");
-                                    return;
-                                }
-
-                                replyAgent.text = root.shorten(r.agent_id || "?", 16);
-                                replyMeta.text  = "in " + (elapsedMs / 1000).toFixed(1) + " s";
-
-                                // Strip the trailing "execution log: codex://CID"
-                                // tail from the response body so it doesn't
-                                // duplicate the chip below; surface the CID
-                                // separately as an actionable chip.
-                                let body = r.result_text || "(empty)";
-                                const m = body.match(/codex:\/\/([A-Za-z0-9]+)/);
-                                let cid = "";
-                                if (m) {
-                                    cid = m[1];
-                                    delegateCidChip.cid = cid;
-                                    body = body.replace(/\s*[-]+\s*execution log:\s*codex:\/\/[A-Za-z0-9]+\s*$/, "");
-                                    // Background pre-fetch: kick off the
-                                    // download so the daemon's libstorage
-                                    // has the bytes locally cached. The
-                                    // response is discarded; the side-
-                                    // effect (Codex repo populated) is
-                                    // what we want — clicking the chip
-                                    // later resolves from cache instantly.
-                                    cidPrefetchTimer.cid = cid;
-                                    cidPrefetchTimer.start();
-                                }
-                                const trimmedBody = body.trim();
-                                delegateResult.color = theme.text;
-                                delegateResult.text = trimmedBody;
-
-                                // Append to history.
-                                historyModel.insert(0, {
-                                    ts: new Date().toISOString(),
+                                tasksModel.insert(0, {
+                                    task_id: ack.task_id,
+                                    status: "running",
                                     capability: delegateCap.text,
                                     text: delegateText.text,
-                                    agent_id: r.agent_id || "",
-                                    body: trimmedBody,
-                                    cid: cid,
-                                    elapsedSecs: (elapsedMs / 1000).toFixed(1)
+                                    agent_id: "",
+                                    body: "",
+                                    cid: "",
+                                    cidPayload: "",
+                                    cidLoading: false,
+                                    cidExpanded: false,
+                                    elapsedSecs: "0",
+                                    error: "",
+                                    startedAt: Date.now()
                                 });
+                                // Clear the task text so the user can
+                                // start typing the next one immediately.
+                                delegateText.text = "";
                             }
                         }
-
-                        // Fires once, ~50 ms after a successful delegation,
-                        // so the synchronous IPC for the actual delegate()
-                        // returns first and the operator sees the response
-                        // before any prefetch latency. Body is discarded —
-                        // we just want libstorage's local Codex repo warm.
-                        Timer {
-                            id: cidPrefetchTimer
-                            property string cid: ""
-                            interval: 50
-                            repeat: false
-                            onTriggered: {
-                                if (cid.length === 0) return;
-                                logos.callModule("agent", "fetch_cid", [cid]);
-                            }
-                        }
-
                         Text {
-                            visible: replyAgent.text.length > 0
-                            text: "← reply from"
-                            color: theme.textSecondary
-                            font.pixelSize: theme.fontSmall
-                        }
-                        Text {
-                            id: replyAgent
-                            color: theme.successSoft
-                            font.pixelSize: theme.fontSmall
-                            font.family: "monospace"
-                        }
-                        Text {
-                            id: replyMeta
                             color: theme.textMuted
                             font.pixelSize: theme.fontSmall
+                            text: tasksModel.count + (tasksModel.count === 1 ? " task" : " tasks")
+                            Layout.leftMargin: theme.spaceSmall
                         }
                         Item { Layout.fillWidth: true }
-
-                        // CID chip — only visible when the response carried
-                        // an audit log. Click loads it into the Audit pane.
-                        Rectangle {
-                            id: delegateCidChip
-                            property string cid: ""
-                            visible: cid.length > 0
-                            radius: theme.radiusSmall
-                            color: Qt.rgba(0.475, 0.753, 1, 0.12)  // info-tinted
-                            border.color: theme.info
-                            border.width: 1
-                            implicitWidth: cidLabel.implicitWidth + 16
-                            implicitHeight: theme.controlHeight - 6
-                            Text {
-                                id: cidLabel
-                                anchors.centerIn: parent
-                                text: "codex://" + root.shorten(parent.cid, 14) + "  ↗"
-                                color: theme.info
-                                font.pixelSize: theme.fontSmall
-                                font.family: "monospace"
+                        DarkButton {
+                            text: "Clear done"
+                            enabled: {
+                                for (let i = 0; i < tasksModel.count; i++) {
+                                    if (tasksModel.get(i).status !== "running") return true;
+                                }
+                                return false;
                             }
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    cidInput.text = delegateCidChip.cid;
-                                    // Auto-fetch so the operator doesn't
-                                    // have to chase across the pane.
-                                    const raw = logos.callModule("agent",
-                                        "fetch_cid", [delegateCidChip.cid]);
-                                    const obj = root.parseModuleJson(raw);
-                                    if (!obj || obj.error) {
-                                        cidOut.text = "Error: " +
-                                            (obj && obj.error ? obj.error : "no response");
-                                        return;
-                                    }
-                                    try {
-                                        cidOut.text = atob(obj.payload_b64 || "");
-                                    } catch (e) {
-                                        cidOut.text = "(non-UTF-8 payload)";
+                            onClicked: {
+                                for (let i = tasksModel.count - 1; i >= 0; i--) {
+                                    if (tasksModel.get(i).status !== "running") {
+                                        tasksModel.remove(i);
                                     }
                                 }
                             }
                         }
                     }
 
-                    // Scrollable result panel — long summaries fit.
-                    Rectangle {
+                    // ── Tasks list (running + completed) ───────────
+                    // Each card renders one delegation. New ones land
+                    // at index 0 in "running" state; the
+                    // delegate_complete handler flips status + fills
+                    // body/cid in place. Multiple cards can be
+                    // running at once.
+                    ListView {
+                        id: tasksList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        Layout.minimumHeight: 90
-                        color: theme.backgroundElevated
-                        border.color: theme.border
-                        border.width: 1
-                        radius: theme.radiusMedium
-
-                        ScrollView {
-                            anchors.fill: parent
-                            anchors.margins: 1
-                            clip: true
-                            TextArea {
-                                id: delegateResult
-                                readOnly: true
-                                placeholderText: "Result will appear here."
-                                placeholderTextColor: theme.textMuted
-                                wrapMode: TextArea.Wrap
-                                color: theme.text
-                                font.pixelSize: theme.fontBody
-                                selectionColor: theme.primary
-                                selectedTextColor: theme.text
-                                background: Item {}
-                                padding: theme.spaceSmall
-                                text: ""
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Audit pane (inside Network tab, below Peers+Delegate) ──
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 130
-            color: theme.backgroundSecondary
-            radius: 6
-            border.color: theme.border
-            border.width: 1
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 12
-                spacing: 6
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Text {
-                        text: "Audit log fetch"
-                        color: theme.text
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
-                        Layout.fillWidth: true
-                    }
-                    DarkTextField {
-                        id: cidInput
-                        placeholderText: "codex://CID (paste here)"
-                        Layout.fillWidth: true
-                    }
-                    DarkPrimaryButton {
-                        text: "Fetch"
-                        enabled: cidInput.text.length > 0
-                        onClicked: {
-                            // Tolerate the codex:// prefix.
-                            const cid = cidInput.text.replace(/^codex:\/\//, "");
-                            const raw = logos.callModule("agent", "fetch_cid", [cid]);
-                            const obj = root.parseModuleJson(raw);
-                            if (!obj || obj.error) {
-                                cidOut.text = "Error: " + (obj && obj.error ? obj.error : "no response");
-                                return;
-                            }
-                            // Decode base64 into UTF-8 best-effort.
-                            try {
-                                const decoded = atob(obj.payload_b64 || "");
-                                cidOut.text = decoded;
-                            } catch (e) {
-                                cidOut.text = "(non-UTF-8 payload, " + (obj.payload_b64 || "").length + " base64 chars)";
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: theme.backgroundElevated
-                    border.color: theme.border
-                    border.width: 1
-                    radius: theme.radiusMedium
-
-                    ScrollView {
-                        anchors.fill: parent
-                        anchors.margins: 1
+                        Layout.minimumHeight: 120
                         clip: true
-                        TextArea {
-                            id: cidOut
-                            readOnly: true
-                            placeholderText: "Fetched payload appears here."
-                            placeholderTextColor: theme.textMuted
-                            wrapMode: TextArea.Wrap
-                            color: theme.text
-                            font.family: "monospace"
-                            font.pixelSize: theme.fontSmall
-                            selectionColor: theme.primary
-                            selectedTextColor: theme.text
-                            background: Item {}
-                            padding: theme.spaceSmall
+                        spacing: 8
+                        model: tasksModel
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                        delegate: Rectangle {
+                            id: taskCard
+                            property bool expanded: status === "running"
+                            width: ListView.view.width
+                            height: cardCol.implicitHeight + 16
+                            color: theme.backgroundElevated
+                            radius: theme.radiusMedium
+                            border.color: status === "running" ? theme.primary
+                                : status === "error"   ? theme.error
+                                : theme.borderSubtle
+                            border.width: 1
+
+                            Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+
+                            ColumnLayout {
+                                id: cardCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                anchors.topMargin: 8
+                                spacing: 6
+
+                                // ── header row: status + caps + peer + time
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Rectangle {
+                                        // status pill
+                                        radius: 3
+                                        color: status === "running"
+                                            ? Qt.rgba(0.94, 0.53, 0.24, 0.15)
+                                          : status === "error"
+                                            ? Qt.rgba(0.97, 0.32, 0.29, 0.15)
+                                          : Qt.rgba(0.34, 0.83, 0.39, 0.15)
+                                        border.color: status === "running" ? theme.primary
+                                            : status === "error" ? theme.error
+                                            : theme.success
+                                        border.width: 1
+                                        implicitWidth: statusLabel.implicitWidth + 14
+                                        implicitHeight: statusLabel.implicitHeight + 4
+                                        Row {
+                                            anchors.centerIn: parent
+                                            spacing: 4
+                                            Rectangle {
+                                                width: 6; height: 6; radius: 3
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                color: status === "running" ? theme.primary
+                                                    : status === "error" ? theme.error
+                                                    : theme.success
+                                                SequentialAnimation on opacity {
+                                                    running: status === "running"
+                                                    loops: Animation.Infinite
+                                                    NumberAnimation { from: 1.0; to: 0.4; duration: 600 }
+                                                    NumberAnimation { from: 0.4; to: 1.0; duration: 600 }
+                                                    onRunningChanged: if (!running) parent.opacity = 1.0
+                                                }
+                                            }
+                                            Text {
+                                                id: statusLabel
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: status
+                                                color: status === "running" ? theme.primary
+                                                    : status === "error" ? theme.error
+                                                    : theme.success
+                                                font.pixelSize: 10
+                                                font.weight: Font.Medium
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        // capability pill
+                                        radius: 3
+                                        color: Qt.rgba(0.49, 0.83, 0.39, 0.12)
+                                        border.color: Qt.rgba(0.49, 0.83, 0.39, 0.4)
+                                        border.width: 1
+                                        implicitWidth: capLabel.implicitWidth + 10
+                                        implicitHeight: capLabel.implicitHeight + 4
+                                        Text {
+                                            id: capLabel
+                                            anchors.centerIn: parent
+                                            text: capability
+                                            color: theme.successSoft
+                                            font.pixelSize: 9
+                                            font.weight: Font.Medium
+                                        }
+                                    }
+                                    Text {
+                                        visible: agent_id.length > 0
+                                        text: "→ " + root.shorten(agent_id, 14)
+                                        color: theme.successSoft
+                                        font.pixelSize: 11
+                                        font.family: "monospace"
+                                    }
+                                    Text {
+                                        visible: status !== "running"
+                                        text: elapsedSecs + "s"
+                                        color: theme.textMuted
+                                        font.pixelSize: 11
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: taskCard.expanded ? "▾" : "▸"
+                                        color: theme.textSecondary
+                                        font.pixelSize: 11
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: taskCard.expanded = !taskCard.expanded
+                                        }
+                                    }
+                                }
+
+                                // task text (always shown, single-line collapsed)
+                                Text {
+                                    text: text
+                                    color: theme.textSecondary
+                                    font.pixelSize: 11
+                                    wrapMode: Text.Wrap
+                                    elide: taskCard.expanded ? Text.ElideNone : Text.ElideRight
+                                    maximumLineCount: taskCard.expanded ? 999 : 1
+                                    Layout.fillWidth: true
+                                }
+
+                                // ── expanded section: response + actions
+                                ColumnLayout {
+                                    visible: taskCard.expanded && status !== "running"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(bodyTxt.implicitHeight + 16, 240)
+                                        color: theme.background
+                                        border.color: theme.borderSubtle
+                                        border.width: 1
+                                        radius: theme.radiusSmall
+
+                                        ScrollView {
+                                            anchors.fill: parent
+                                            anchors.margins: 1
+                                            clip: true
+                                            TextArea {
+                                                id: bodyTxt
+                                                readOnly: true
+                                                text: status === "error"
+                                                    ? ("Error: " + (error || "(unknown)"))
+                                                    : body
+                                                color: status === "error" ? theme.error : theme.text
+                                                font.pixelSize: 12
+                                                wrapMode: TextArea.Wrap
+                                                selectionColor: theme.primary
+                                                selectedTextColor: theme.text
+                                                background: Item {}
+                                                padding: 8
+                                            }
+                                        }
+                                    }
+
+                                    // Audit-log inline panel (only when
+                                    // a CID exists, and only when the
+                                    // user clicks View log).
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        visible: cid.length > 0 && cidExpanded
+                                        Layout.preferredHeight: Math.min(auditTxt.implicitHeight + 16, 200)
+                                        color: theme.background
+                                        border.color: theme.info
+                                        border.width: 1
+                                        radius: theme.radiusSmall
+
+                                        ScrollView {
+                                            anchors.fill: parent
+                                            anchors.margins: 1
+                                            clip: true
+                                            TextArea {
+                                                id: auditTxt
+                                                readOnly: true
+                                                text: cidLoading ? "Fetching audit log…"
+                                                    : cidPayload || "(no payload yet — click View log)"
+                                                color: theme.text
+                                                font.pixelSize: 11
+                                                font.family: "monospace"
+                                                wrapMode: TextArea.Wrap
+                                                background: Item {}
+                                                padding: 8
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        DarkButton {
+                                            text: "Re-run"
+                                            onClicked: {
+                                                delegateCap.text = capability;
+                                                delegateText.text = text;
+                                                delegateText.forceActiveFocus();
+                                            }
+                                        }
+                                        DarkButton {
+                                            text: "Follow up"
+                                            visible: status === "done"
+                                            onClicked: {
+                                                delegateCap.text = capability;
+                                                delegateText.text =
+                                                    "Previous task:\n" + text +
+                                                    "\n\nPrevious answer:\n" + body +
+                                                    "\n\nFollow-up: ";
+                                                delegateText.forceActiveFocus();
+                                                delegateText.cursorPosition = delegateText.length;
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                        Rectangle {
+                                            visible: cid.length > 0
+                                            radius: theme.radiusSmall
+                                            color: cidExpanded
+                                                ? theme.info
+                                                : Qt.rgba(0.475, 0.753, 1, 0.12)
+                                            border.color: theme.info
+                                            border.width: 1
+                                            implicitWidth: cidLbl.implicitWidth + 14
+                                            implicitHeight: theme.controlHeight - 6
+                                            Text {
+                                                id: cidLbl
+                                                anchors.centerIn: parent
+                                                text: cidExpanded ? "Hide log"
+                                                    : (cidLoading ? "Loading…" : "View log")
+                                                color: cidExpanded ? "#ffffff" : theme.info
+                                                font.pixelSize: theme.fontSmall
+                                                font.weight: Font.Medium
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    if (cidExpanded) {
+                                                        tasksModel.setProperty(index, "cidExpanded", false);
+                                                    } else if (cidPayload) {
+                                                        // Already prefetched — show instantly
+                                                        tasksModel.setProperty(index, "cidExpanded", true);
+                                                    } else {
+                                                        tasksModel.setProperty(index, "cidLoading", true);
+                                                        tasksModel.setProperty(index, "cidExpanded", true);
+                                                        logos.callModule("agent",
+                                                            "start_fetch_cid", [cid]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            visible: tasksModel.count === 0
+                            anchors.centerIn: parent
+                            text: "Run a delegation above to populate this list."
+                            color: theme.textMuted
+                            font.pixelSize: 11
+                            font.italic: true
                         }
                     }
                 }
             }
         }
+
         } // end Network tab ColumnLayout
 
         // ── Trust tab ──────────────────────────────────────────
@@ -1320,252 +1494,6 @@ Item {
             }
         }
 
-        // ── History tab ────────────────────────────────────────
-        // In-memory log of every successful delegation this session.
-        // Click a row to repopulate the Delegate form (capability +
-        // task text) and jump back to the Network tab — useful for
-        // re-running a task or sending a follow-up.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            color: theme.backgroundSecondary
-            radius: 6
-            border.color: theme.border
-            border.width: 1
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                        text: "Task history (this session)"
-                        color: theme.text
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
-                        Layout.fillWidth: true
-                    }
-                    Text {
-                        text: historyModel.count + " tasks"
-                        color: theme.textSecondary
-                        font.pixelSize: 11
-                    }
-                    DarkButton {
-                        text: "Clear"
-                        enabled: historyModel.count > 0
-                        onClicked: historyModel.clear()
-                    }
-                }
-
-                ListView {
-                    id: historyList
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    spacing: 6
-                    boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                    model: historyModel
-
-                    delegate: Rectangle {
-                        id: histRow
-                        property bool expanded: false
-                        width: ListView.view.width
-                        height: histCol.implicitHeight + 16
-                        color: histArea.containsMouse
-                            ? Qt.lighter(theme.backgroundElevated, 1.3)
-                            : theme.backgroundElevated
-                        radius: theme.radiusMedium
-                        border.color: histArea.containsMouse ? theme.primary : theme.borderSubtle
-                        border.width: 1
-
-                        Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
-
-                        MouseArea {
-                            id: histArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: histRow.expanded = !histRow.expanded
-                        }
-
-                        ColumnLayout {
-                            id: histCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
-                            anchors.topMargin: 8
-                            spacing: 4
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 8
-
-                                Rectangle {
-                                    radius: 3
-                                    color: Qt.rgba(0.92, 0.48, 0.34, 0.15)
-                                    border.color: Qt.rgba(0.92, 0.48, 0.34, 0.4)
-                                    border.width: 1
-                                    implicitWidth: capPill.implicitWidth + 10
-                                    implicitHeight: capPill.implicitHeight + 4
-                                    Text {
-                                        id: capPill
-                                        anchors.centerIn: parent
-                                        text: model.capability
-                                        color: theme.primary
-                                        font.pixelSize: 9
-                                        font.weight: Font.Medium
-                                    }
-                                }
-                                Text {
-                                    text: "→ " + root.shorten(model.agent_id, 16)
-                                    color: theme.successSoft
-                                    font.pixelSize: 11
-                                    font.family: "monospace"
-                                }
-                                Text {
-                                    text: model.elapsedSecs + "s"
-                                    color: theme.textMuted
-                                    font.pixelSize: 11
-                                }
-                                Item { Layout.fillWidth: true }
-                                Text {
-                                    text: model.ts.split("T")[1].slice(0, 8) + "Z"
-                                    color: theme.textMuted
-                                    font.pixelSize: 10
-                                    font.family: "monospace"
-                                }
-                            }
-
-                            Text {
-                                text: model.text
-                                color: theme.text
-                                font.pixelSize: 12
-                                wrapMode: Text.Wrap
-                                elide: histRow.expanded ? Text.ElideNone : Text.ElideRight
-                                maximumLineCount: histRow.expanded ? 999 : 1
-                                Layout.fillWidth: true
-                            }
-
-                            // Expanded view: full response + actions
-                            ColumnLayout {
-                                visible: histRow.expanded
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: histResponse.implicitHeight + 16
-                                    Layout.maximumHeight: 180
-                                    color: theme.background
-                                    border.color: theme.borderSubtle
-                                    border.width: 1
-                                    radius: theme.radiusSmall
-
-                                    ScrollView {
-                                        anchors.fill: parent
-                                        anchors.margins: 1
-                                        clip: true
-                                        TextArea {
-                                            id: histResponse
-                                            readOnly: true
-                                            text: model.body
-                                            color: theme.text
-                                            font.pixelSize: 11
-                                            wrapMode: TextArea.Wrap
-                                            background: Item {}
-                                            padding: 8
-                                            selectionColor: theme.primary
-                                            selectedTextColor: theme.text
-                                        }
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-
-                                    DarkButton {
-                                        text: "Re-run"
-                                        onClicked: {
-                                            delegateCap.text = model.capability;
-                                            delegateText.text = model.text;
-                                            tabs.currentIndex = 0;
-                                            delegateText.forceActiveFocus();
-                                        }
-                                    }
-                                    DarkButton {
-                                        text: "Follow up"
-                                        onClicked: {
-                                            delegateCap.text = model.capability;
-                                            delegateText.text =
-                                                "Previous task:\n" + model.text +
-                                                "\n\nPrevious answer:\n" + model.body +
-                                                "\n\nFollow-up: ";
-                                            tabs.currentIndex = 0;
-                                            delegateText.forceActiveFocus();
-                                            delegateText.cursorPosition = delegateText.length;
-                                        }
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    Rectangle {
-                                        visible: model.cid && model.cid.length > 0
-                                        radius: theme.radiusSmall
-                                        color: Qt.rgba(0.475, 0.753, 1, 0.12)
-                                        border.color: theme.info
-                                        border.width: 1
-                                        implicitWidth: histCidLabel.implicitWidth + 16
-                                        implicitHeight: theme.controlHeight - 6
-                                        Text {
-                                            id: histCidLabel
-                                            anchors.centerIn: parent
-                                            text: "codex://" + root.shorten(model.cid, 12) + "  ↗"
-                                            color: theme.info
-                                            font.pixelSize: theme.fontSmall
-                                            font.family: "monospace"
-                                        }
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                cidInput.text = model.cid;
-                                                tabs.currentIndex = 0;
-                                                const raw = logos.callModule("agent",
-                                                    "fetch_cid", [model.cid]);
-                                                const obj = root.parseModuleJson(raw);
-                                                if (!obj || obj.error) {
-                                                    cidOut.text = "Error: " +
-                                                        (obj && obj.error ? obj.error : "no response");
-                                                    return;
-                                                }
-                                                try {
-                                                    cidOut.text = atob(obj.payload_b64 || "");
-                                                } catch (e) {
-                                                    cidOut.text = "(non-UTF-8 payload)";
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text {
-                    visible: historyModel.count === 0
-                    text: "No tasks yet — delegate something on the Network tab to populate this list."
-                    color: theme.textMuted
-                    font.pixelSize: 11
-                    font.italic: true
-                    Layout.alignment: Qt.AlignHCenter
-                }
-            }
-        }
         } // end StackLayout
     }
 }
