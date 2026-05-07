@@ -38,6 +38,12 @@ pub enum Request {
         timeout_secs: u64,
         broadcast: bool,
         strategy: Option<String>,
+        /// Optional conversation thread id. When set, the receiving
+        /// agent's exec gets `LMAO_SESSION_ID=<this>` so wrappers can
+        /// reuse a per-thread session and skip cold-start cost on
+        /// follow-up turns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
     },
     /// Fetch raw bytes by CID from the daemon's storage backend, if
     /// configured.
@@ -51,12 +57,34 @@ pub enum Request {
         nickname: String,
         capabilities: Vec<String>,
         notes: Option<String>,
+        /// Optional X25519 encryption pubkey for sealed presence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encryption_pubkey: Option<String>,
     },
     /// Remove a trusted peer by pubkey or nickname.
     TrustRemove { target: String },
     /// Set the enforcement mode. Pass `mode = None` to query without
     /// changing it.
     TrustMode { mode: Option<String> },
+    /// List persisted task-history rows. Newest first. All filters
+    /// optional; `limit` defaults to 100, `offset` defaults to 0.
+    TaskHistoryList {
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
+        /// `"delegated"` or `"received"` to filter by direction.
+        #[serde(default)]
+        direction: Option<String>,
+        /// Filter by exact capability match (e.g. `"summarize"`).
+        #[serde(default)]
+        capability: Option<String>,
+        /// Only return entries created at or after this unix-ms timestamp.
+        #[serde(default)]
+        since_ms: Option<u64>,
+    },
+    /// Look up a single history row by task_id.
+    TaskHistoryGet { task_id: String },
     /// Graceful shutdown — daemon completes in-flight work, drops the
     /// socket, exits the process.
     Shutdown,
@@ -73,6 +101,17 @@ pub enum Response {
         uptime_secs: u64,
         socket_path: PathBuf,
         storage_enabled: bool,
+        /// Hex-encoded X25519 pubkey, if the agent has an encryption identity.
+        /// Friends pass this to `lmao trust add --encryption-pubkey ...` so
+        /// sealed presence envelopes can reach this agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encryption_pubkey: Option<String>,
+        /// Snapshot of the agent's currently-advertised load — populated
+        /// from `LmaoNode::current_load_status` so callers (UI, CLI) can
+        /// show capacity without waiting for a sealed presence
+        /// roundtrip.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        load: Option<LoadStatusWire>,
     },
     Discover {
         agents: Vec<AgentCardWire>,
@@ -119,6 +158,13 @@ pub enum Response {
         current: String,
         persisted: bool,
     },
+    TaskHistoryList {
+        entries: Vec<HistoryEntryWire>,
+        history_path: Option<PathBuf>,
+    },
+    TaskHistoryGet {
+        entry: Option<HistoryEntryWire>,
+    },
     ShutdownAck,
     Error {
         message: String,
@@ -145,6 +191,42 @@ pub struct PeerWire {
     pub waku_topic: String,
     pub last_seen_secs: u64,
     pub ttl_secs: u64,
+    /// Last decrypted load status from this peer, if any sealed envelope
+    /// was addressed to us. `None` means the peer didn't ship sealed
+    /// status, didn't address one to us, or we have no X25519 identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<LoadStatusWire>,
+}
+
+/// Coarse-grained capacity hint shown in `lmao info` and the UI peer
+/// cards. Mirrors `logos_messaging_a2a_core::LoadStatus` but is shaped
+/// for the IPC wire (string bucket, not enum) so it survives older
+/// clients that don't know about new bucket variants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadStatusWire {
+    /// `"free"`, `"busy"`, or `"full"`.
+    pub bucket: String,
+    pub queue_depth: u32,
+    pub max_concurrent: u32,
+    #[serde(default)]
+    pub avg_latency_ms: u32,
+}
+
+impl From<&logos_messaging_a2a_core::LoadStatus> for LoadStatusWire {
+    fn from(s: &logos_messaging_a2a_core::LoadStatus) -> Self {
+        let bucket = match s.bucket {
+            logos_messaging_a2a_core::LoadBucket::Free => "free",
+            logos_messaging_a2a_core::LoadBucket::Busy => "busy",
+            logos_messaging_a2a_core::LoadBucket::Full => "full",
+        }
+        .to_string();
+        LoadStatusWire {
+            bucket,
+            queue_depth: s.queue_depth,
+            max_concurrent: s.max_concurrent,
+            avg_latency_ms: s.avg_latency_ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +256,39 @@ pub struct DelegationWire {
     pub success: bool,
     pub result_text: Option<String>,
     pub error: Option<String>,
+}
+
+/// Wire projection of a [`logos_messaging_a2a_node::history::HistoryEntry`].
+/// Mirrors that struct's fields one-for-one — kept as a separate type
+/// so the daemon protocol's wire shape isn't tied to the node crate's
+/// internal representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntryWire {
+    pub task_id: String,
+    #[serde(default)]
+    pub parent_id: String,
+    pub created_at_ms: u64,
+    pub direction: String,
+    pub peer_pubkey: String,
+    #[serde(default)]
+    pub peer_name: String,
+    #[serde(default)]
+    pub capability: String,
+    pub text: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub cid: String,
+    pub success: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Conversation thread id. Same value across all turns of a
+    /// multi-turn delegation; UI uses it to group threaded follow-ups.
+    /// Empty for older entries that pre-date the auto-stamping.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 /// Where the daemon binds its IPC socket by default. Honours
@@ -208,6 +323,8 @@ mod tests {
             uptime_secs: 42,
             socket_path: PathBuf::from("/tmp/lmao.sock"),
             storage_enabled: true,
+            encryption_pubkey: None,
+            load: None,
         };
         let s = serde_json::to_string(&r).unwrap();
         let parsed: Response = serde_json::from_str(&s).unwrap();
@@ -245,6 +362,7 @@ mod tests {
                 timeout_secs: 30,
                 broadcast: false,
                 strategy: Some("capability_match".into()),
+                session_id: None,
             },
             Request::StorageFetch { cid: "Q...".into() },
             Request::TrustList,
@@ -253,6 +371,7 @@ mod tests {
                 nickname: "alice".into(),
                 capabilities: vec!["text".into()],
                 notes: Some("ETHPrague".into()),
+                encryption_pubkey: None,
             },
             Request::TrustRemove {
                 target: "alice".into(),
@@ -281,6 +400,8 @@ mod tests {
                 uptime_secs: 7,
                 socket_path: PathBuf::from("/tmp/lmao.sock"),
                 storage_enabled: false,
+                encryption_pubkey: None,
+                load: None,
             },
             Response::Discover {
                 agents: vec![AgentCardWire {
@@ -300,6 +421,7 @@ mod tests {
                     waku_topic: "/lmao/1/task-02cd/proto".into(),
                     last_seen_secs: 3,
                     ttl_secs: 60,
+                    load: None,
                 }],
             },
             Response::TaskSend {

@@ -29,6 +29,13 @@ pub struct DelegationRequest {
     /// How long to wait (seconds) for the delegate to respond.
     /// `0` means use the default timeout.
     pub timeout_secs: u64,
+    /// Optional conversation thread id. When set, the receiver's exec
+    /// is invoked with `LMAO_SESSION_ID=<this>`, letting it reuse a
+    /// per-thread session — pi `--session <id>`, lemonade prefix-cache
+    /// from a stored conversation history — instead of cold-starting
+    /// every follow-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// The result of a delegated subtask, including which agent handled it.
@@ -102,6 +109,7 @@ mod tests {
                 capability: "summarize".to_string(),
             },
             timeout_secs: 30,
+            session_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: DelegationRequest = serde_json::from_str(&json).unwrap();
@@ -148,6 +156,7 @@ mod tests {
             subtask_text: "task".to_string(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 0,
+            session_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: DelegationRequest = serde_json::from_str(&json).unwrap();
@@ -170,6 +179,7 @@ mod tests {
             subtask_text: "t".to_string(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 10,
+            session_id: None,
         };
         let cloned = req.clone();
         assert_eq!(req, cloned);

@@ -84,7 +84,9 @@ impl<T: Transport> LmaoNode<T> {
         let tasks = verified_tasks;
         Metrics::inc_by(&self.metrics.tasks_received, tasks.len() as u64);
 
-        // Track incoming tasks in their sessions
+        // Track incoming tasks in their sessions. `push_task` caps the
+        // per-session `task_ids` so a long conversation can't grow the
+        // session indefinitely.
         for task in &tasks {
             if let Some(ref sid) = task.session_id {
                 let mut sessions = self.sessions.lock().unwrap();
@@ -93,9 +95,7 @@ impl<T: Transport> LmaoNode<T> {
                     Metrics::inc(&metrics.sessions_created);
                     Session::new(&task.from)
                 });
-                if !session.task_ids.contains(&task.id) {
-                    session.task_ids.push(task.id.clone());
-                }
+                session.push_task(task.id.clone());
             }
         }
         Ok(tasks)
@@ -643,6 +643,7 @@ mod tests {
             waku_topic: "/topic".into(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(ann);
         let payload = serde_json::to_vec(&envelope).unwrap();

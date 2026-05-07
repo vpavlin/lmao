@@ -59,9 +59,13 @@ public:
     /// The QML side starts the call, then listens via
     /// `Connections { target: logos; function onModuleEventReceived(...) }`
     /// to render results without blocking the UI thread.
+    /// `session_id` (empty string = none) threads the conversation: when
+    /// set, the receiver's exec gets `LMAO_SESSION_ID=<id>` so wrappers
+    /// (pi --session, lemonade conversation history) can reuse a thread
+    /// instead of cold-starting on every follow-up.
     /// (Single-line signature — the universal-module C++ parser
     /// silently skips multi-line method declarations.)
-    std::string start_delegate(const std::string& capability, const std::string& text);
+    std::string start_delegate(const std::string& capability, const std::string& text, const std::string& session_id);
 
     /// Send a task directly to a known recipient pubkey.
     std::string send_task(const std::string& recipient_pubkey, const std::string& text);
@@ -118,6 +122,20 @@ public:
     /// query without changing it; otherwise `"off"`, `"enforce"`, or
     /// `"log"`.
     std::string trust_mode(const std::string& new_mode);
+
+    /// List persisted task history (newest first). Pass empty strings
+    /// for `direction` and `capability` to skip those filters. `limit`
+    /// caps the page size; `offset` skips entries before applying the
+    /// cap (useful for pagination). Returns the daemon JSON shape:
+    /// `{kind: "task_history_list", entries: [...], history_path?}`.
+    /// (Single-line signature — the universal-module C++ parser
+    /// silently skips multi-line method declarations.)
+    std::string task_history_list(int64_t limit, int64_t offset, const std::string& direction, const std::string& capability);
+
+    /// Look up a single persisted task by id. Returns
+    /// `{kind: "task_history_get", entry?: {...}}` — the entry is
+    /// `null` if no row matches.
+    std::string task_history_get(const std::string& task_id);
 
     /// Event emission callback — wired up by the universal-module
     /// generator at construction time so it can dispatch to the

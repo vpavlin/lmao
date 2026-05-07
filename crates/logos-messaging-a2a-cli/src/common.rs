@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use logos_messaging_a2a_crypto::AgentIdentity;
 use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::Transport;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub fn parse_capabilities(capabilities: &str) -> Vec<String> {
@@ -34,13 +35,57 @@ pub fn build_node(
     identity: &IdentityConfig,
 ) -> Result<LmaoNode<Arc<dyn Transport>>> {
     let node = if let Some(ref path) = identity.keyfile {
-        LmaoNode::from_keyfile(name, description, capabilities, transport, path)?
+        let node = LmaoNode::from_keyfile(name, description, capabilities, transport, path)?;
+        // Sealed presence needs an X25519 identity. When the user has
+        // a keyfile, auto-load/generate a sidecar `.x25519` next to it
+        // so encryption pubkey is stable across restarts. This makes
+        // the friend-keyring exchange one-time: nicknames don't change
+        // identity hex.
+        let x25519_path = sidecar_x25519_path(path);
+        let x_identity = load_or_create_x25519(&x25519_path)?;
+        node.with_identity(x_identity)
     } else if identity.encrypt {
         LmaoNode::new_encrypted(name, description, capabilities, transport)
     } else {
         LmaoNode::new(name, description, capabilities, transport)
     };
     Ok(node)
+}
+
+fn sidecar_x25519_path(keyfile: &Path) -> PathBuf {
+    let mut p = keyfile.to_path_buf();
+    let ext = match keyfile.extension().and_then(|e| e.to_str()) {
+        Some(e) => format!("{e}.x25519"),
+        None => "x25519".to_string(),
+    };
+    p.set_extension(ext);
+    p
+}
+
+fn load_or_create_x25519(path: &Path) -> Result<AgentIdentity> {
+    if path.exists() {
+        let hex = std::fs::read_to_string(path)
+            .with_context(|| format!("reading X25519 sidecar {}", path.display()))?;
+        AgentIdentity::from_hex(hex.trim())
+            .with_context(|| format!("parsing X25519 secret in {}", path.display()))
+    } else {
+        let id = AgentIdentity::generate();
+        write_secret_file(path, &id.secret_hex())
+            .with_context(|| format!("writing X25519 sidecar {}", path.display()))?;
+        Ok(id)
+    }
+}
+
+fn write_secret_file(path: &Path, hex_secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(hex_secret.as_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]

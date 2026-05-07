@@ -88,3 +88,64 @@ services:
       --daemon-socket /run/lmao/lmao.sock
       agent run --name bob --capabilities code,review
         --exec "sh -c 'echo reviewer-stderr-line >&2; sed s/^/[reviewed]\\ \\ \\ /'"
+
+  # Pi-analyst peer — runs the pi coding agent (https://pi.dev) inside
+  # the container so its read/bash/edit/write tools can probe the local
+  # filesystem freely without ever reaching the host. The pi binary +
+  # /usr/local/bin/pi-exec wrapper are baked into the image; pi config
+  # (LLM provider endpoints, model lists) is mounted read-only from the
+  # operator's host ~/.pi so credentials don't bake into the image.
+  pi-analyst:
+    build:
+      context: .
+      network: host
+    image: lmao:dev
+    container_name: lmao-pi-analyst
+    user: "1000:1000"
+    restart: unless-stopped
+    # Host networking so libstorage's TCP listen addrs (whatever the
+    # Codex node binds at startup) are reachable from Basecamp's
+    # libstorage on the same host. With the default bridge network the
+    # SPR points at a 172.x.x.x address that the host can't dial, so
+    # direct-dial fetches hang. Tradeoff: container shares host's
+    # network namespace, exposing all bound ports; fine on a trusted
+    # demo machine.
+    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/pi-analyst:/data
+      - ./demo-data/pi-analyst-sock:/run/lmao
+      # Dedicated demo pi config (NOT the operator's host ~/.pi). Pins
+      # provider=lemonade-k11 + model=4B and contains only the providers
+      # the demo uses, so changes to the host's pi config can't bleed
+      # into the container. Read-only so the container can't write back.
+      - ./demo-config/pi:/home/lmao/.pi:ro
+    ports:
+      - "60012:60012/tcp"
+      - "9012:9012/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      # Pi tools enabled — safe inside the container, gives the model
+      # real read/bash/curl access to ground its analysis.
+      PI_TOOLS: "1"
+      # Tool-call turns (curl + reason) can cross the default 180 s
+      # ceiling under load. Generous budget so the model isn't killed
+      # mid-fetch. Provider + model defaults live in
+      # demo-config/pi/agent/settings.json — no env override needed.
+      PI_TIMEOUT: "900"
+      # Pi writes per-thread session sidecars under PI_SESSION_DIR.
+      # Default would land in ~/.pi/sessions/lmao, but that mount is
+      # read-only (provider config). Redirect to the writable /data
+      # volume so session-resume / KV-cache reuse works.
+      PI_SESSION_DIR: "/data/pi-sessions"
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19202
+      --keyfile /data/keyfile
+      --tcp-port 60012 --udp-port 9012
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name pi-analyst --capabilities analyze,review,explain,text
+        --exec /usr/local/bin/pi-exec

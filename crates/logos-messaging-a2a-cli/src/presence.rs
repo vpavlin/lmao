@@ -364,6 +364,7 @@ mod tests {
             waku_topic: "/waku/2/a2a-echo/proto".to_string(),
             ttl_secs: 300,
             last_seen: 1700000000,
+            load: None,
         };
         let value = peer_to_json("02abcdef", &info);
         let output = serde_json::to_string(&value).unwrap();

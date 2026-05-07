@@ -134,6 +134,11 @@ impl DaemonServer {
                 uptime_secs: self.started_at.elapsed().as_secs(),
                 socket_path: self.socket_path.clone(),
                 storage_enabled: self.storage.is_some(),
+                encryption_pubkey: self
+                    .node
+                    .identity()
+                    .map(|id| id.public_key_hex()),
+                load: Some((&self.node.current_load_status()).into()),
             }),
             Request::Discover => {
                 let cards = self.node.discover().await?;
@@ -171,6 +176,7 @@ impl DaemonServer {
                             waku_topic: info.waku_topic,
                             last_seen_secs: info.last_seen.min(now_secs),
                             ttl_secs: info.ttl_secs,
+                            load: info.load.as_ref().map(|l| l.into()),
                         })
                         .collect(),
                 })
@@ -209,6 +215,7 @@ impl DaemonServer {
                 timeout_secs,
                 broadcast,
                 strategy,
+                session_id,
             } => {
                 let strategy =
                     build_strategy(to.as_deref(), capability.as_deref(), strategy.as_deref());
@@ -217,6 +224,7 @@ impl DaemonServer {
                     subtask_text: text,
                     strategy,
                     timeout_secs,
+                    session_id,
                 };
                 let results = if broadcast {
                     self.node.delegate_broadcast(&request).await?
@@ -271,6 +279,7 @@ impl DaemonServer {
                 nickname,
                 capabilities,
                 notes,
+                encryption_pubkey,
             } => {
                 // First add: bump Off → Enforce so the list is actually
                 // applied. Mirrors the `lmao trust add` CLI behaviour.
@@ -287,6 +296,7 @@ impl DaemonServer {
                     capabilities,
                     notes,
                     added_at: SystemTime::now(),
+                    encryption_pubkey,
                 });
                 let persisted = self.persist_trust();
                 Ok(Response::TrustAdd {
@@ -325,6 +335,49 @@ impl DaemonServer {
                     persisted,
                 })
             }
+            Request::TaskHistoryList {
+                limit,
+                offset,
+                direction,
+                capability,
+                since_ms,
+            } => {
+                let Some(history) = self.node.history() else {
+                    return Ok(Response::TaskHistoryList {
+                        entries: Vec::new(),
+                        history_path: None,
+                    });
+                };
+                let filter = logos_messaging_a2a_node::history::HistoryFilter {
+                    direction,
+                    capability,
+                    since_ms,
+                };
+                let limit = limit.unwrap_or(100).min(10_000);
+                let offset = offset.unwrap_or(0);
+                let entries = history
+                    .list(limit, offset, &filter)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("history list failed: {e}"))?
+                    .into_iter()
+                    .map(history_to_wire)
+                    .collect();
+                Ok(Response::TaskHistoryList {
+                    entries,
+                    history_path: Some(history.path().to_path_buf()),
+                })
+            }
+            Request::TaskHistoryGet { task_id } => {
+                let Some(history) = self.node.history() else {
+                    return Ok(Response::TaskHistoryGet { entry: None });
+                };
+                let entry = history
+                    .get(&task_id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("history get failed: {e}"))?
+                    .map(history_to_wire);
+                Ok(Response::TaskHistoryGet { entry })
+            }
             Request::Shutdown => {
                 // Reply first; the spawned task will exit the process
                 // after we return. The accept loop will then exit on
@@ -338,6 +391,27 @@ impl DaemonServer {
                 Ok(Response::ShutdownAck)
             }
         }
+    }
+}
+
+fn history_to_wire(
+    e: logos_messaging_a2a_node::history::HistoryEntry,
+) -> super::protocol::HistoryEntryWire {
+    super::protocol::HistoryEntryWire {
+        task_id: e.task_id,
+        parent_id: e.parent_id,
+        created_at_ms: e.created_at_ms,
+        direction: e.direction,
+        peer_pubkey: e.peer_pubkey,
+        peer_name: e.peer_name,
+        capability: e.capability,
+        text: e.text,
+        body: e.body,
+        cid: e.cid,
+        success: e.success,
+        error: e.error,
+        elapsed_ms: e.elapsed_ms,
+        session_id: e.session_id,
     }
 }
 

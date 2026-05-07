@@ -76,6 +76,15 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, global = true)]
     pub udp_port: u16,
 
+    /// Static peer multiaddr to dial at startup, in addition to the
+    /// preset's bootstrap list. Repeat for multiple peers. Accepts
+    /// `enrtree:`, `enr:`, or plain `/ip4/.../tcp/.../p2p/<peerId>`.
+    /// Useful when the preset's hardcoded entry-node peer-IDs are stale
+    /// (server-side rotation), or for fully local peer-to-peer setups
+    /// where the public mesh isn't needed.
+    #[arg(long = "entry-node", global = true)]
+    pub entry_nodes: Vec<String>,
+
     /// Storage backend for the audit log of each task's exec output.
     /// `libstorage` embeds a Logos Storage node in-process; `none`
     /// drops the log.
@@ -92,6 +101,14 @@ pub struct Cli {
     /// one host.
     #[arg(long, default_value_t = 0, global = true)]
     pub storage_port: u16,
+
+    /// SPR (Signed Peer Record) of a peer storage node to dial at
+    /// startup, so two libstorage instances can find each other
+    /// directly without a public DHT. Repeat for multiple. Equivalent
+    /// of `--entry-node` for the storage layer. Get the value from a
+    /// running peer's `lmao storage info` output (or its startup log).
+    #[arg(long = "storage-bootstrap", global = true)]
+    pub storage_bootstrap: Vec<String>,
 
     /// Path to the trust list TOML file. `agent run` loads it on
     /// startup; the `lmao trust` subcommands read/write it. Defaults to
@@ -195,6 +212,14 @@ pub enum TrustAction {
         /// Free-form note ("met at ETHPrague 2026", etc.).
         #[arg(long)]
         notes: Option<String>,
+        /// Hex-encoded X25519 encryption pubkey (32 bytes / 64 hex
+        /// chars). Required for sealed presence — when set, this agent
+        /// will encrypt its load status into a per-peer envelope and
+        /// attach it to every announcement so the friend can route
+        /// around saturation. Get the value from the friend's
+        /// `lmao info` output.
+        #[arg(long)]
+        encryption_pubkey: Option<String>,
     },
     /// Remove a trusted peer by pubkey *or* nickname.
     Remove {
@@ -324,6 +349,28 @@ pub enum TaskAction {
         /// Delegation strategy: first-available, broadcast, round-robin
         #[arg(long)]
         strategy: Option<String>,
+    },
+    /// List recent persisted task history (newest first). Requires a
+    /// running `lmao agent run` daemon — the daemon is the source of
+    /// truth for history, not the local process.
+    History {
+        /// Maximum number of entries to return.
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        /// Skip this many newest entries before applying limit.
+        #[arg(long, default_value = "0")]
+        offset: usize,
+        /// Filter to one direction.
+        #[arg(long, value_parser = ["delegated", "received"])]
+        direction: Option<String>,
+        /// Filter to entries with exactly this capability.
+        #[arg(long)]
+        capability: Option<String>,
+    },
+    /// Show one persisted task by id.
+    Get {
+        /// Task ID (subtask uuid for delegated rows, task id for received rows).
+        task_id: String,
     },
 }
 

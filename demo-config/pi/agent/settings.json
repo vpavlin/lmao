@@ -1,0 +1,15 @@
+{
+  "defaultProvider": "venice",
+  "defaultModel": "deepseek-v4-flash",
+  "hideThinkingBlock": true,
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 5000,
+    "provider": {
+      "timeoutMs": 1200000,
+      "maxRetries": 0,
+      "maxRetryDelayMs": 60000
+    }
+  }
+}

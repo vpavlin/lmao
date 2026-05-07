@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
             capability: "summarize".to_string(),
         },
         timeout_secs: 5,
+        session_id: None,
     };
     let summarize_result = orchestrator.delegate_task(&summarize_request).await?;
     println!(
@@ -150,6 +151,7 @@ async fn main() -> Result<()> {
             capability: "translate".to_string(),
         },
         timeout_secs: 5,
+        session_id: None,
     };
     let translate_result = orchestrator.delegate_task(&translate_request).await?;
     println!(

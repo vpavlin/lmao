@@ -44,10 +44,30 @@ async fn try_via_daemon(
             timeout_secs: *timeout,
             broadcast: *broadcast,
             strategy: strategy.clone(),
+            // CLI delegate doesn't take --session-id today; daemons
+            // started by basecamp populate it from the QML follow-up
+            // path. Plumb through when we add `lmao task delegate
+            // --session <id>`.
+            session_id: None,
         },
         // Streaming isn't on the daemon protocol yet — fall through to
         // the local poll loop.
         TaskAction::Stream { .. } => return Ok(false),
+        TaskAction::History {
+            limit,
+            offset,
+            direction,
+            capability,
+        } => Request::TaskHistoryList {
+            limit: Some(*limit),
+            offset: Some(*offset),
+            direction: direction.clone(),
+            capability: capability.clone(),
+            since_ms: None,
+        },
+        TaskAction::Get { task_id } => Request::TaskHistoryGet {
+            task_id: task_id.clone(),
+        },
     };
 
     let resp = client.send(request).await?;
@@ -138,9 +158,133 @@ fn print_daemon_response(resp: Response, json: bool) -> Result<()> {
             }
             Ok(())
         }
+        Response::TaskHistoryList { entries, history_path } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "entries": entries,
+                        "history_path": history_path,
+                    }))?
+                );
+                return Ok(());
+            }
+            eprintln!("Source: daemon");
+            if let Some(p) = history_path {
+                eprintln!("History: {}", p.display());
+            }
+            if entries.is_empty() {
+                println!("No history entries yet.");
+                return Ok(());
+            }
+            for e in entries {
+                let status = if e.success { "OK  " } else { "FAIL" };
+                let dir = match e.direction.as_str() {
+                    "delegated" => ">",
+                    "received" => "<",
+                    _ => "?",
+                };
+                let peer = if e.peer_name.is_empty() {
+                    e.peer_pubkey[..12.min(e.peer_pubkey.len())].to_string()
+                } else {
+                    format!(
+                        "{} ({})",
+                        e.peer_name,
+                        &e.peer_pubkey[..8.min(e.peer_pubkey.len())]
+                    )
+                };
+                println!(
+                    "{ts} [{status}] {dir} {peer}  cap={cap}  {ms}ms",
+                    ts = format_unix_ms(e.created_at_ms),
+                    cap = if e.capability.is_empty() { "-" } else { &e.capability },
+                    ms = e.elapsed_ms,
+                );
+                let preview: String = e.text.chars().take(80).collect();
+                println!("    text: {preview}");
+                if !e.body.is_empty() {
+                    let body: String = e.body.chars().take(80).collect();
+                    println!("    body: {body}");
+                }
+                if let Some(err) = e.error {
+                    println!("    err:  {err}");
+                }
+                println!("    id:   {}", e.task_id);
+            }
+            Ok(())
+        }
+        Response::TaskHistoryGet { entry } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "entry": entry,
+                    }))?
+                );
+                return Ok(());
+            }
+            let Some(e) = entry else {
+                println!("No history entry with that id.");
+                return Ok(());
+            };
+            println!("Task ID:   {}", e.task_id);
+            println!("Direction: {}", e.direction);
+            println!("Peer:      {} ({})", e.peer_name, e.peer_pubkey);
+            if !e.capability.is_empty() {
+                println!("Capability: {}", e.capability);
+            }
+            println!("When:      {}", format_unix_ms(e.created_at_ms));
+            println!("Elapsed:   {}ms", e.elapsed_ms);
+            println!("Success:   {}", e.success);
+            if let Some(err) = e.error {
+                println!("Error:     {err}");
+            }
+            if !e.cid.is_empty() {
+                println!("Audit CID: codex://{}", e.cid);
+            }
+            println!("Text:");
+            println!("{}", e.text);
+            if !e.body.is_empty() {
+                println!("\nBody:");
+                println!("{}", e.body);
+            }
+            Ok(())
+        }
         Response::Error { message } => Err(anyhow!("daemon error: {message}")),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
+}
+
+/// Format a unix-millisecond timestamp as `YYYY-MM-DD HH:MM:SS` UTC.
+/// Avoids pulling chrono/time; the demo display doesn't need locale.
+fn format_unix_ms(ms: u64) -> String {
+    let secs = ms / 1000;
+    // Days since 1970-01-01 (proleptic Gregorian, Julian-day style).
+    let days = (secs / 86_400) as i64;
+    let sod = secs % 86_400;
+    let h = sod / 3600;
+    let m = (sod % 3600) / 60;
+    let s = sod % 60;
+    let (y, mo, d) = ymd_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}Z")
+}
+
+/// Convert days-since-1970-01-01 → (year, month, day). Algorithm from
+/// Howard Hinnant's date library: avoids leap-second / leap-day
+/// branches by transforming through a March-anchored era.
+fn ymd_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719468; // days since 0000-03-01
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe as i32 + (era as i32) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 pub async fn handle(
@@ -466,6 +610,7 @@ pub async fn handle(
                 subtask_text: text,
                 strategy,
                 timeout_secs: timeout,
+                session_id: None,
             };
 
             if broadcast {
@@ -570,6 +715,13 @@ pub async fn handle(
                     }
                 }
             }
+        }
+        TaskAction::History { .. } | TaskAction::Get { .. } => {
+            return Err(anyhow!(
+                "task history requires a running `lmao agent run` daemon — \
+                history is daemon-side state. Set --daemon-socket or run \
+                `lmao agent run` first."
+            ));
         }
     }
     Ok(())

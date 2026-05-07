@@ -895,6 +895,7 @@ mod tests {
             waku_topic: "/a2a/tasks/fake".to_string(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(unsigned);
         let payload = serde_json::to_vec(&envelope).unwrap();
@@ -1038,6 +1039,7 @@ mod tests {
             waku_topic: "/a2a/tasks/abcdef".to_string(),
             ttl_secs: 300,
             last_seen: 1_700_000_000,
+            load: None,
         };
 
         let output = format_peer_entry(1, "abcdef1234567890abcdef", &info);
@@ -1056,6 +1058,7 @@ mod tests {
             waku_topic: "/a2a/tasks/short".to_string(),
             ttl_secs: 60,
             last_seen: 0,
+            load: None,
         };
 
         // Agent ID shorter than 16 chars should not panic.
@@ -1071,6 +1074,7 @@ mod tests {
             waku_topic: "/a2a/tasks/nocaps".to_string(),
             ttl_secs: 120,
             last_seen: 0,
+            load: None,
         };
 
         let output = format_peer_entry(1, "abcdef1234567890abcdef", &info);
@@ -1091,6 +1095,7 @@ mod tests {
             waku_topic: "/a2a/tasks/multi".to_string(),
             ttl_secs: 600,
             last_seen: 0,
+            load: None,
         };
 
         let output = format_peer_entry(3, "abcdef1234567890abcdef", &info);

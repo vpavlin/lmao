@@ -189,6 +189,7 @@ mod tests {
             waku_topic: "/lmao/1/tasks/peer1/proto".into(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         });
         node.peer_map.update(&PresenceAnnouncement {
             agent_id: "peer2".into(),
@@ -197,6 +198,7 @@ mod tests {
             waku_topic: "/lmao/1/tasks/peer2/proto".into(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         });
 
         assert_eq!(node.find_peers_by_capability("image").len(), 1);

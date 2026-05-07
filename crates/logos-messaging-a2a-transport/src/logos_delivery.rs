@@ -51,6 +51,14 @@ pub struct NodeConfig {
     pub tcp_port: Option<u16>,
     #[serde(rename = "discv5UdpPort", skip_serializing_if = "Option::is_none")]
     pub discv5_udp_port: Option<u16>,
+    /// Explicit entry-node multiaddrs to dial in addition to (or instead
+    /// of) whatever the preset bakes in. libwaku accepts `enrtree:`,
+    /// `enr:`, or plain `/ip4/.../tcp/.../p2p/<peerId>` strings here and
+    /// connects them as static peers. Useful when the preset's
+    /// hardcoded peer-IDs are stale, or when running fully local
+    /// peer-to-peer setups where the public mesh isn't needed.
+    #[serde(rename = "entryNodes", skip_serializing_if = "Vec::is_empty")]
+    pub entry_nodes: Vec<String>,
 }
 
 impl NodeConfig {
@@ -63,6 +71,7 @@ impl NodeConfig {
             preset: Some("logos.dev".to_string()),
             tcp_port: None,
             discv5_udp_port: None,
+            entry_nodes: Vec::new(),
         }
     }
 }

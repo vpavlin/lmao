@@ -64,6 +64,13 @@ impl AgentIdentity {
         hex::encode(self.public.as_bytes())
     }
 
+    /// Hex-encoded secret key. Use only for persisting an agent's
+    /// identity to disk (with restrictive file permissions); never
+    /// share this value over the wire.
+    pub fn secret_hex(&self) -> String {
+        hex::encode(self.secret.to_bytes())
+    }
+
     /// Reconstruct from hex-encoded secret key (32 bytes = 64 hex chars). For testing.
     pub fn from_hex(secret_hex: &str) -> Result<Self> {
         let bytes = hex::decode(secret_hex)?;
@@ -89,12 +96,77 @@ impl AgentIdentity {
         let shared = self.secret.diffie_hellman(their_pubkey);
         SessionKey(*shared.as_bytes())
     }
+
+    /// Decrypt a sealed envelope addressed to this identity.
+    ///
+    /// `ephemeral_pub` is the 32-byte X25519 pubkey from the envelope; the
+    /// AEAD key is derived as `ECDH(my_static_secret, ephemeral_pub)`.
+    /// Used by sealed-presence consumers — see `seal_for` for the pair.
+    pub fn unseal(
+        &self,
+        ephemeral_pub: &[u8; 32],
+        nonce: &[u8; 12],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>> {
+        let pub_key = PublicKey::from(*ephemeral_pub);
+        let key = self.shared_key(&pub_key);
+        key.decrypt_raw(nonce, ciphertext)
+    }
+}
+
+/// Encrypt `plaintext` to a single recipient under a fresh ephemeral
+/// X25519 keypair, returning the bytes the recipient needs to decrypt:
+/// `(ephemeral_pub, nonce, ciphertext)`. Pair with [`AgentIdentity::unseal`].
+///
+/// Each call generates a new ephemeral keypair, so the same plaintext
+/// encrypted to the same recipient produces different ciphertext —
+/// observers can't link envelopes by content.
+pub fn seal_for(recipient_pub: &PublicKey, plaintext: &[u8]) -> Result<([u8; 32], [u8; 12], Vec<u8>)> {
+    let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
+    let ephemeral_pub = PublicKey::from(&ephemeral_secret);
+    let shared = ephemeral_secret.diffie_hellman(recipient_pub);
+    let key = SessionKey::from_bytes(*shared.as_bytes());
+    let (nonce, ciphertext) = key.encrypt_raw(plaintext)?;
+    Ok((*ephemeral_pub.as_bytes(), nonce, ciphertext))
 }
 
 /// Symmetric session key derived from ECDH.
 pub struct SessionKey([u8; 32]);
 
 impl SessionKey {
+    /// Construct a SessionKey from a raw 32-byte symmetric key.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        SessionKey(bytes)
+    }
+
+    /// Borrow the 32-byte symmetric key.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Encrypt plaintext returning raw (nonce, ciphertext) bytes — useful when
+    /// the caller wants to embed the result in a binary wire format rather
+    /// than base64-tagged JSON.
+    pub fn encrypt_raw(&self, plaintext: &[u8]) -> Result<([u8; 12], Vec<u8>)> {
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.0)
+            .map_err(|e| CryptoError::Cipher(format!("cipher init: {}", e)))?;
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+            .map_err(|e| CryptoError::Cipher(format!("encrypt: {}", e)))?;
+        Ok((nonce_bytes, ciphertext))
+    }
+
+    /// Decrypt raw (nonce, ciphertext) bytes.
+    pub fn decrypt_raw(&self, nonce_bytes: &[u8; 12], ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.0)
+            .map_err(|e| CryptoError::Cipher(format!("cipher init: {}", e)))?;
+        cipher
+            .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+            .map_err(|e| CryptoError::Cipher(format!("decrypt: {}", e)))
+    }
+
     /// Encrypt plaintext, returns EncryptedPayload with random nonce.
     #[allow(deprecated)]
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedPayload> {

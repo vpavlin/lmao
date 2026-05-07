@@ -39,6 +39,25 @@ constexpr int SOCKET_WAIT_MS = 60'000;
 /// its initial announce.
 constexpr int SOCKET_SETTLE_MS = 1'500;
 
+/// Default delegation poll timeout (seconds). Local LLMs (especially
+/// 35B+ on lemonade with cold KV cache) routinely sit 60-90 s on the
+/// first turn, so the historical 60 s default surfaced as spurious
+/// "delegation timed out" cards. Bumped to 180 s; override per-instance
+/// via `LMAO_AGENT_DELEGATE_TIMEOUT_SECS`.
+int delegateTimeoutSecs() {
+    bool ok = false;
+    int v = qEnvironmentVariable("LMAO_AGENT_DELEGATE_TIMEOUT_SECS").toInt(&ok);
+    if (ok && v > 0) return v;
+    return 180;
+}
+
+/// IPC envelope read window (milliseconds). Always a bit larger than
+/// the daemon-side delegation timeout so the timeout response itself
+/// has room to propagate before our local read gives up.
+int delegateEnvelopeMs() {
+    return delegateTimeoutSecs() * 1000 + 30'000;
+}
+
 QString errorJson(const QString& message) {
     QJsonObject obj;
     obj["error"] = message;
@@ -124,6 +143,12 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     const QString storagePort = qEnvironmentVariable("LMAO_AGENT_STORAGE_PORT", "19500");
 
     QStringList args;
+    // Persistent identity: keyfile lives next to the storage dir so
+    // restarting Basecamp doesn't reroll the agent's secp256k1 pubkey.
+    // Also unlocks sealed-presence on the basecamp daemon — `build_node`
+    // auto-creates a `<keyfile>.x25519` sidecar when --keyfile is set.
+    const QString agentKeyfile =
+        QDir::homePath() + "/.local/share/lmao/agent.key";
     args << "--daemon-socket"     << m_state->socketPath
          << "--transport"         << "logos-delivery"
          << "--tcp-port"          << tcpPort
@@ -131,7 +156,41 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
          << "--storage"           << "libstorage"
          << "--storage-data-dir"  << QDir::homePath() + "/.local/share/lmao/storage"
          << "--storage-port"      << storagePort
-         << "agent" << "run"
+         << "--keyfile"           << agentKeyfile;
+
+    // Optional explicit entry-node peers — comma- or whitespace-separated
+    // multiaddrs from $LMAO_AGENT_ENTRY_NODES. Used when the preset's
+    // hardcoded bootstrap list is stale (server-side key rotation), or
+    // for local-only peer-to-peer demos where the public mesh isn't
+    // wanted. Repeats `--entry-node <multiaddr>` once per entry.
+    {
+        const QString raw = qEnvironmentVariable("LMAO_AGENT_ENTRY_NODES");
+        if (!raw.isEmpty()) {
+            const auto parts = raw.split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                         Qt::SkipEmptyParts);
+            for (const QString& p : parts) {
+                args << "--entry-node" << p;
+            }
+        }
+    }
+
+    // Optional storage-layer bootstrap peers (SPRs) — same shape as
+    // the Waku entry-node mechanism above, but for the embedded
+    // libstorage Codex node. Lets two storage nodes find each other
+    // directly so the "View log" / fetch-CID path works without
+    // relying on the public DHT bootstrap.
+    {
+        const QString raw = qEnvironmentVariable("LMAO_AGENT_STORAGE_BOOTSTRAP");
+        if (!raw.isEmpty()) {
+            const auto parts = raw.split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                         Qt::SkipEmptyParts);
+            for (const QString& p : parts) {
+                args << "--storage-bootstrap" << p;
+            }
+        }
+    }
+
+    args << "agent" << "run"
          << "--name"              << "basecamp"
          << "--capabilities"      << "text"
          << "--exec"              << qEnvironmentVariable(
@@ -324,16 +383,15 @@ std::string AgentImpl::delegate(const std::string& capability,
     req["text"] = QString::fromStdString(text);
     req["parent_id"] = QStringLiteral("basecamp-%1")
                            .arg(QDateTime::currentMSecsSinceEpoch());
-    // Worker-response poll timeout. A summarizer running Qwen3.5-4B
-    // against a URL prompt routinely sits at 30-50 s of inference; 25 s
-    // surfaced as "delegation timed out" too often. 60 s gives the
-    // model room to think while still bounding the wait.
-    req["timeout_secs"] = 60;
+    // Worker-response poll timeout. Configurable via
+    // LMAO_AGENT_DELEGATE_TIMEOUT_SECS — default 180 s. Local 35B
+    // models on lemonade routinely take 60-120 s on the first turn
+    // (cold KV cache); 60 s was too tight and surfaced as spurious
+    // "delegation timed out".
+    req["timeout_secs"] = delegateTimeoutSecs();
     req["broadcast"] = false;
     req["strategy"] = QJsonValue::Null;
-    // IPC envelope must outlast the daemon's internal poll so the
-    // timeout response itself doesn't get clipped. 90 s.
-    return sendRequest(m_state->socketPath, req, 90'000).toStdString();
+    return sendRequest(m_state->socketPath, req, delegateEnvelopeMs()).toStdString();
 }
 
 std::string AgentImpl::send_task(const std::string& recipient_pubkey,
@@ -376,18 +434,32 @@ std::string AgentImpl::fetch_cid(const std::string& cid) {
 // before emitting, so destroyed callbacks aren't fired.
 
 std::string AgentImpl::start_delegate(const std::string& capability,
-                                      const std::string& text) {
+                                      const std::string& text,
+                                      const std::string& session_id) {
     if (!m_state->started.load(std::memory_order_acquire)) {
         return errorJson("daemon not running").toStdString();
     }
     const std::string task_id = newRequestId();
+    // Stamp a session_id even on first-turn delegations. Without one,
+    // the receiver runs the executor in `--no-session` mode (pi-exec
+    // doesn't write a sidecar), and a later "Follow up" can't resume
+    // anything — pi creates a fresh session that doesn't know about
+    // the original task. Auto-stamping makes the first task's session
+    // exist, so the follow-up actually continues the same pi thread.
+    const std::string effective_session =
+        session_id.empty() ? newRequestId() : session_id;
     auto state = m_state;
     auto cb = emitEvent;
     QString cap = QString::fromStdString(capability);
     QString txt = QString::fromStdString(text);
     QString taskIdQ = QString::fromStdString(task_id);
+    QString sessionQ = QString::fromStdString(effective_session);
+    // Snapshot the configured timeout in the foreground so the worker
+    // sees a stable value even if the env changes mid-run.
+    int timeoutSecs = delegateTimeoutSecs();
+    int envelopeMs = delegateEnvelopeMs();
 
-    std::thread([state, cb, cap, txt, taskIdQ]() {
+    std::thread([state, cb, cap, txt, taskIdQ, sessionQ, timeoutSecs, envelopeMs]() {
         const auto t0 = std::chrono::steady_clock::now();
         QJsonObject req;
         req["kind"]         = "task_delegate";
@@ -395,11 +467,15 @@ std::string AgentImpl::start_delegate(const std::string& capability,
         req["capability"]   = cap;
         req["text"]         = txt;
         req["parent_id"]    = QStringLiteral("basecamp-%1").arg(taskIdQ);
-        req["timeout_secs"] = 60;
+        req["timeout_secs"] = timeoutSecs;
         req["broadcast"]    = false;
         req["strategy"]     = QJsonValue::Null;
+        // Always send session_id — first-turn delegations get an
+        // auto-stamped one (above) so the receiver's executor creates
+        // a real session sidecar that a later "Follow up" can resume.
+        req["session_id"] = sessionQ;
 
-        QString resp = sendRequest(state->socketPath, req, 90'000);
+        QString resp = sendRequest(state->socketPath, req, envelopeMs);
         const auto t1 = std::chrono::steady_clock::now();
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
@@ -446,7 +522,13 @@ std::string AgentImpl::start_delegate(const std::string& capability,
     }).detach();
 
     QJsonObject ack;
-    ack["task_id"] = taskIdQ;
+    ack["task_id"]    = taskIdQ;
+    // Echo the (possibly auto-stamped) session_id back so the QML can
+    // store it on the task card. Follow-up uses model.session_id ?? task_id;
+    // if we didn't return it, the QML would never see the auto-stamped
+    // value and would fall through to task_id as a session-id, which
+    // doesn't match the receiver's sidecar.
+    ack["session_id"] = QString::fromStdString(effective_session);
     return QString::fromUtf8(QJsonDocument(ack).toJson(QJsonDocument::Compact)).toStdString();
 }
 
@@ -538,6 +620,31 @@ std::string AgentImpl::trust_mode(const std::string& new_mode) {
     req["kind"] = "trust_mode";
     req["mode"] = new_mode.empty() ? QJsonValue(QJsonValue::Null)
                                    : QJsonValue(QString::fromStdString(new_mode));
+    return sendRequest(m_state->socketPath, req).toStdString();
+}
+
+std::string AgentImpl::task_history_list(int64_t limit,
+                                         int64_t offset,
+                                         const std::string& direction,
+                                         const std::string& capability) {
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
+    QJsonObject req;
+    req["kind"]      = "task_history_list";
+    req["limit"]     = limit > 0 ? QJsonValue((qint64)limit) : QJsonValue(QJsonValue::Null);
+    req["offset"]    = offset > 0 ? QJsonValue((qint64)offset) : QJsonValue(QJsonValue::Null);
+    req["direction"] = direction.empty()  ? QJsonValue(QJsonValue::Null)
+                                          : QJsonValue(QString::fromStdString(direction));
+    req["capability"] = capability.empty() ? QJsonValue(QJsonValue::Null)
+                                           : QJsonValue(QString::fromStdString(capability));
+    req["since_ms"]  = QJsonValue(QJsonValue::Null);
+    return sendRequest(m_state->socketPath, req).toStdString();
+}
+
+std::string AgentImpl::task_history_get(const std::string& task_id) {
+    if (!m_state->started.load(std::memory_order_acquire)) return errorJson("daemon not running").toStdString();
+    QJsonObject req;
+    req["kind"]    = "task_history_get";
+    req["task_id"] = QString::fromStdString(task_id);
     return sendRequest(m_state->socketPath, req).toStdString();
 }
 

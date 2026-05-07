@@ -110,7 +110,8 @@ async fn main() -> Result<()> {
                 storage,
                 daemon_socket,
                 &identity,
-                cli.trust_file,
+                cli.trust_file.clone(),
+                cli.storage_data_dir.clone(),
                 json,
             )
             .await
@@ -154,6 +155,9 @@ pub(crate) async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
             if cli.udp_port != 0 {
                 config.discv5_udp_port = Some(cli.udp_port);
             }
+            if !cli.entry_nodes.is_empty() {
+                config.entry_nodes = cli.entry_nodes.clone();
+            }
             // Quieter by default for CLI users — the libp2p / nim-waku INFO
             // stream is great for debugging and noisy on stdout. Override
             // with LMAO_NODE_LOG_LEVEL when triaging connection issues.
@@ -192,7 +196,18 @@ pub(crate) async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBac
             } else {
                 Some(cli.storage_port)
             };
-            let backend = LibstorageBackend::with_config(&data_dir, port, None).await?;
+            let backend = LibstorageBackend::with_config(
+                &data_dir,
+                port,
+                None,
+                &cli.storage_bootstrap,
+            )
+            .await?;
+            // Surface our own SPR so a peer can dial us. Best-effort —
+            // a startup hiccup shouldn't break agent_run.
+            if let Ok(spr) = backend.spr().await {
+                eprintln!("[storage] SPR: {spr}");
+            }
             Ok(Some(Arc::new(backend)))
         }
     }

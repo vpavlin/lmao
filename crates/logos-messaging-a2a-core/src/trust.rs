@@ -57,6 +57,14 @@ pub struct TrustEntry {
     /// Free-form note ("met at ETHPrague 2026", "alice's laptop", …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// X25519 public key (hex) used for sealed-presence ECDH. When set,
+    /// agents include a per-friend sealed status envelope in their
+    /// presence broadcasts so this peer can see live load info. When
+    /// unset, the peer is still trusted for delegation routing but
+    /// won't see load hints. Operators paste this from each other's
+    /// `lmao info` output when adding the friend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_pubkey: Option<String>,
     /// Wall-clock time the entry was added. Used for sort/audit.
     #[serde(default = "SystemTime::now")]
     pub added_at: SystemTime,
@@ -298,6 +306,7 @@ mod tests {
             capabilities: caps.iter().map(|s| s.to_string()).collect(),
             notes: None,
             added_at: SystemTime::UNIX_EPOCH,
+            encryption_pubkey: None,
         }
     }
 
@@ -345,6 +354,7 @@ mod tests {
             capabilities: vec!["code".into()],
             notes: Some("met at ETHPrague".into()),
             added_at: SystemTime::UNIX_EPOCH,
+            encryption_pubkey: None,
         });
         list.add(entry("03cd", "bob", &["text"]));
 

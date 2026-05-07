@@ -40,11 +40,29 @@ pub async fn handle(
             nickname,
             capabilities,
             notes,
+            encryption_pubkey,
         } => {
             if daemon_up {
-                add_via_daemon(&client, pubkey, nickname, capabilities, notes, json).await
+                add_via_daemon(
+                    &client,
+                    pubkey,
+                    nickname,
+                    capabilities,
+                    notes,
+                    encryption_pubkey,
+                    json,
+                )
+                .await
             } else {
-                add(&path, pubkey, nickname, capabilities, notes, json)
+                add(
+                    &path,
+                    pubkey,
+                    nickname,
+                    capabilities,
+                    notes,
+                    encryption_pubkey,
+                    json,
+                )
             }
         }
         TrustAction::Remove { target } => {
@@ -118,6 +136,7 @@ async fn add_via_daemon(
     nickname: String,
     capabilities: Vec<String>,
     notes: Option<String>,
+    encryption_pubkey: Option<String>,
     json: bool,
 ) -> Result<()> {
     let resp = client
@@ -126,6 +145,7 @@ async fn add_via_daemon(
             nickname: nickname.clone(),
             capabilities,
             notes,
+            encryption_pubkey,
         })
         .await?;
     let Response::TrustAdd {
@@ -276,6 +296,7 @@ fn add(
     nickname: String,
     capabilities: Vec<String>,
     notes: Option<String>,
+    encryption_pubkey: Option<String>,
     json: bool,
 ) -> Result<()> {
     let mut list = TrustList::load_from(path)
@@ -291,6 +312,7 @@ fn add(
         capabilities,
         notes,
         added_at: SystemTime::now(),
+        encryption_pubkey,
     });
     list.save_to(path)
         .with_context(|| format!("saving trust file {}", path.display()))?;

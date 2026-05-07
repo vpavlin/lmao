@@ -76,10 +76,31 @@ FROM debian:trixie-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         libgomp1 \
         libssl3 \
         libstdc++6 \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 (LTS) for the pi coding agent. Pi is distributed as an npm
+# package and used as one of the executor flavours (capability:
+# analyze/review/explain) — kept inside the container so its read/bash/
+# edit/write tools can never reach the host filesystem.
+ARG NODE_VERSION=22.12.0
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) NODE_ARCH=x64 ;; \
+         arm64) NODE_ARCH=arm64 ;; \
+         *) echo "unsupported arch: $ARCH" >&2 ; exit 1 ;; \
+       esac \
+    && curl -fsSLo /tmp/node.tar.xz \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+        --exclude=CHANGELOG.md --exclude=LICENSE --exclude=README.md \
+    && rm /tmp/node.tar.xz \
+    && /usr/local/bin/npm install -g @mariozechner/pi-coding-agent \
+    && /usr/local/bin/npm cache clean --force
 
 # Non-root user. The agent never needs root inside the container; if
 # you mount in a host directory, chown it to 1000:1000.
@@ -93,6 +114,13 @@ RUN ldconfig
 
 COPY --from=builder /src/target/release/logos-messaging-a2a /usr/local/bin/lmao
 COPY --from=builder /build/goose-bin/goose                   /usr/local/bin/goose
+
+# Bundle the pi-exec wrapper so containers can use it as their --exec
+# without a separate volume mount. Pi config (model providers, auth)
+# is mounted at runtime from the host's ~/.pi so credentials don't
+# bake into the image.
+COPY scripts/pi-exec.sh /usr/local/bin/pi-exec
+RUN chmod +x /usr/local/bin/pi-exec
 
 # Default writable locations. Compose volumes mount over /data and
 # /run/lmao at runtime so storage and the daemon socket persist (or

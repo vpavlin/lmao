@@ -40,6 +40,8 @@ pub async fn handle(
                 uptime_secs,
                 socket_path,
                 storage_enabled,
+                encryption_pubkey: _,
+                load: _,
             } = resp
             else {
                 return Err(anyhow!("unexpected daemon response: {resp:?}"));

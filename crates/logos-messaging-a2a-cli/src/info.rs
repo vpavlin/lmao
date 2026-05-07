@@ -34,6 +34,8 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
         uptime_secs,
         socket_path,
         storage_enabled,
+        encryption_pubkey,
+        load,
     } = resp
     else {
         anyhow::bail!("unexpected response variant from daemon: {resp:?}");
@@ -41,7 +43,7 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
 
     let task_topic = topics::task_topic(&pubkey);
     if json {
-        let obj = serde_json::json!({
+        let mut obj = serde_json::json!({
             "source": "daemon",
             "socket": socket_path,
             "name": name,
@@ -53,11 +55,24 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
             "discovery_topic": topics::DISCOVERY,
             "presence_topic": topics::PRESENCE,
         });
+        if let Some(ref ep) = encryption_pubkey {
+            obj["encryption_pubkey"] = serde_json::json!(ep);
+        }
+        if let Some(ref l) = load {
+            obj["load"] = serde_json::json!({
+                "bucket": l.bucket,
+                "queue_depth": l.queue_depth,
+                "max_concurrent": l.max_concurrent,
+            });
+        }
         println!("{}", serde_json::to_string(&obj)?);
     } else {
         eprintln!("Source: daemon ({})", socket_path.display());
         println!("Agent name:      {name}");
         println!("Public key:      {pubkey}");
+        if let Some(ref ep) = encryption_pubkey {
+            println!("X25519 pubkey:   {ep}");
+        }
         println!("Capabilities:    {}", capabilities.join(", "));
         println!("Task topic:      {task_topic}");
         println!("Discovery topic: {}", topics::DISCOVERY);
@@ -70,6 +85,12 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
                 "disabled"
             }
         );
+        if let Some(ref l) = load {
+            println!(
+                "Load:            {} (queue {}/{})",
+                l.bucket, l.queue_depth, l.max_concurrent
+            );
+        }
         println!("Uptime:          {uptime_secs}s");
     }
     Ok(())

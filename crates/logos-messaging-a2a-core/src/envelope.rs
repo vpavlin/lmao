@@ -94,7 +94,7 @@ mod tests {
             capabilities: vec!["text".to_string()],
             waku_topic: "/lmao/1/task-02abcdef/proto".to_string(),
             ttl_secs: 300,
-            signature: Some(vec![0xab, 0xcd]),
+            sealed_status: vec![], signature: Some(vec![0xab, 0xcd]),
         };
         let envelope = A2AEnvelope::Presence(ann.clone());
         let json = serde_json::to_string(&envelope).unwrap();
@@ -149,6 +149,7 @@ mod tests {
                     waku_topic: "/t".to_string(),
                     ttl_secs: 60,
                     signature: None,
+            sealed_status: vec![],
                 }),
                 "presence",
             ),
@@ -290,6 +291,7 @@ mod tests {
                 waku_topic: "/t".into(),
                 ttl_secs: 60,
                 signature: None,
+            sealed_status: vec![],
             }),
             A2AEnvelope::StreamChunk(TaskStreamChunk {
                 task_id: "t".into(),
@@ -354,7 +356,7 @@ mod tests {
             capabilities: vec![],
             waku_topic: "/t".into(),
             ttl_secs: 60,
-            signature: Some(vec![0xde, 0xad]),
+            sealed_status: vec![], signature: Some(vec![0xde, 0xad]),
         };
         let envelope = A2AEnvelope::Presence(ann);
         let json = serde_json::to_string(&envelope).unwrap();

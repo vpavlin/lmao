@@ -2,17 +2,33 @@
 //! them to capable peers discovered via presence.
 
 use logos_messaging_a2a_core::{
-    topics, A2AEnvelope, DelegationRequest, DelegationResult, DelegationStrategy, Task,
+    topics, A2AEnvelope, DelegationRequest, DelegationResult, DelegationStrategy, LoadBucket, Task,
+    TaskState,
 };
 use logos_messaging_a2a_transport::Transport;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::metrics::Metrics;
+use crate::presence::PeerInfo;
 use crate::{LmaoNode, NodeError, Result};
 
 /// Default timeout for delegation when none is specified (30 seconds).
 const DEFAULT_DELEGATION_TIMEOUT_SECS: u64 = 30;
+
+/// Rank peers by their last-known load: known Free first, known Busy
+/// second, unknown (no sealed envelope addressed to us) third, known
+/// Full last. Routing prefers higher-ranked peers — Free peers are
+/// chosen before Busy ones, Full peers are skipped if any alternative
+/// exists.
+fn load_rank(info: &PeerInfo) -> u8 {
+    match info.load.as_ref().map(|l| l.bucket) {
+        Some(LoadBucket::Free) => 0,
+        Some(LoadBucket::Busy) => 1,
+        None => 2,
+        Some(LoadBucket::Full) => 3,
+    }
+}
 
 impl<T: Transport> LmaoNode<T> {
     /// Delegate a subtask to a single peer based on the delegation strategy.
@@ -30,10 +46,13 @@ impl<T: Transport> LmaoNode<T> {
         // Find a suitable peer based on strategy. The trust list filters
         // the candidate set in `TrustMode::Enforce` / `Log`; in
         // `TrustMode::Off` `is_trusted*` returns true for every pubkey
-        // and the closure is a no-op.
+        // and the closure is a no-op. Within each strategy, peers are
+        // sorted by `load_rank` so Free peers are picked before Busy
+        // ones and Full peers are tried last.
         let peer_id = match &request.strategy {
             DelegationStrategy::FirstAvailable => {
-                let peers = self.peers().all_live();
+                let mut peers = self.peers().all_live();
+                peers.sort_by_key(|(_, info)| load_rank(info));
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
@@ -43,7 +62,8 @@ impl<T: Transport> LmaoNode<T> {
                     })?
             }
             DelegationStrategy::CapabilityMatch { capability } => {
-                let peers = self.find_peers_by_capability(capability);
+                let mut peers = self.find_peers_by_capability(capability);
+                peers.sort_by_key(|(_, info)| load_rank(info));
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
@@ -56,7 +76,8 @@ impl<T: Transport> LmaoNode<T> {
             }
             DelegationStrategy::BroadcastCollect => {
                 // For single delegation, broadcast acts like first-available
-                let peers = self.peers().all_live();
+                let mut peers = self.peers().all_live();
+                peers.sort_by_key(|(_, info)| load_rank(info));
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
@@ -66,10 +87,17 @@ impl<T: Transport> LmaoNode<T> {
                     })?
             }
             DelegationStrategy::RoundRobin => {
-                let peers: Vec<String> = self
-                    .peers()
-                    .all_live()
+                let live = self.peers().all_live();
+                // Round-robin only among the best-load tier — once that
+                // tier saturates we naturally walk to the next tier.
+                let best_rank = live
+                    .iter()
+                    .map(|(_, info)| load_rank(info))
+                    .min()
+                    .unwrap_or(2);
+                let peers: Vec<String> = live
                     .into_iter()
+                    .filter(|(_, info)| load_rank(info) == best_rank)
                     .map(|(id, _)| id)
                     .filter(|id| self.is_trusted(id))
                     .collect();
@@ -157,7 +185,12 @@ impl<T: Transport> LmaoNode<T> {
         peer_id: &str,
         timeout_secs: u64,
     ) -> Result<DelegationResult> {
-        let task = Task::new(self.pubkey(), peer_id, &request.subtask_text);
+        let task = match request.session_id.as_deref() {
+            Some(sid) if !sid.is_empty() => {
+                Task::new_in_session(self.pubkey(), peer_id, &request.subtask_text, sid)
+            }
+            _ => Task::new(self.pubkey(), peer_id, &request.subtask_text),
+        };
         let subtask_id = task.id.clone();
 
         // Publish directly to transport (bypassing SDS reliable delivery)
@@ -168,34 +201,130 @@ impl<T: Transport> LmaoNode<T> {
         self.channel().transport().publish(&topic, &payload).await?;
 
         // Poll for response with timeout
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+        let started_at = tokio::time::Instant::now();
+        let deadline = started_at + Duration::from_secs(timeout_secs);
 
         while tokio::time::Instant::now() < deadline {
             let tasks = self.poll_tasks().await?;
             for received in &tasks {
                 if received.id == subtask_id {
-                    return Ok(DelegationResult {
+                    // Inspect the response state — receivers signal exec
+                    // failure via `TaskState::Failed` (paired with the
+                    // error message in `result`). Treating that as a
+                    // successful response would have the UI render an
+                    // error log as if it were a normal answer.
+                    let body = received.result_text().map(String::from);
+                    let success = !matches!(received.state, TaskState::Failed);
+                    let result = DelegationResult {
                         parent_task_id: request.parent_task_id.clone(),
                         subtask_id: subtask_id.clone(),
                         agent_id: peer_id.to_string(),
-                        result_text: received.result_text().map(String::from),
-                        success: true,
-                        error: None,
-                    });
+                        result_text: if success { body.clone() } else { None },
+                        success,
+                        error: if success { None } else { body },
+                    };
+                    self.record_delegation_history(
+                        &result,
+                        &request.subtask_text,
+                        capability_of(&request.strategy),
+                        started_at.elapsed(),
+                        request.session_id.clone(),
+                    )
+                    .await;
+                    return Ok(result);
                 }
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
-        Ok(DelegationResult {
+        let result = DelegationResult {
             parent_task_id: request.parent_task_id.clone(),
             subtask_id,
             agent_id: peer_id.to_string(),
             result_text: None,
             success: false,
             error: Some("delegation timed out".to_string()),
-        })
+        };
+        self.record_delegation_history(
+            &result,
+            &request.subtask_text,
+            capability_of(&request.strategy),
+            started_at.elapsed(),
+            request.session_id.clone(),
+        )
+        .await;
+        Ok(result)
     }
+
+    /// Persist a finished delegation (success or timeout) into the
+    /// task-history log, if one is attached. Look up the peer's
+    /// display name from the live presence map best-effort. Extract
+    /// the Codex CID from the result_text trailer when present so the
+    /// UI can render the audit-log link without re-parsing.
+    async fn record_delegation_history(
+        &self,
+        result: &DelegationResult,
+        subtask_text: &str,
+        capability: String,
+        elapsed: Duration,
+        session_id: Option<String>,
+    ) {
+        let Some(history) = self.history.as_ref() else {
+            return;
+        };
+        let body = result.result_text.clone().unwrap_or_default();
+        let cid = extract_codex_cid(&body);
+        let peer_name = self
+            .peer_map
+            .get(&result.agent_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let entry = crate::history::HistoryEntry {
+            task_id: result.subtask_id.clone(),
+            parent_id: result.parent_task_id.clone(),
+            created_at_ms: crate::history::now_ms(),
+            direction: "delegated".to_string(),
+            peer_pubkey: result.agent_id.clone(),
+            peer_name,
+            capability,
+            text: subtask_text.to_string(),
+            body,
+            cid,
+            success: result.success,
+            error: result.error.clone(),
+            elapsed_ms: elapsed.as_millis() as u64,
+            session_id: session_id.unwrap_or_default(),
+        };
+        if let Err(e) = history.append(&entry).await {
+            tracing::warn!(err=%e, "failed to append delegation to history");
+        }
+    }
+}
+
+/// Best-effort capability extraction for history rows. `CapabilityMatch`
+/// is the only strategy that carries one; the others get an empty
+/// string ("any").
+fn capability_of(strategy: &DelegationStrategy) -> String {
+    match strategy {
+        DelegationStrategy::CapabilityMatch { capability } => capability.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Pull the trailing `codex://<cid>` reference (if any) out of a
+/// receiver's response text. Receivers add this trailer when they
+/// upload the exec audit log to libstorage; the UI uses the CID to
+/// fetch + display the log on demand.
+pub(crate) fn extract_codex_cid(body: &str) -> String {
+    // Look for `codex://` prefix, take alphanumeric chars after it.
+    let Some(idx) = body.find("codex://") else {
+        return String::new();
+    };
+    let tail = &body[idx + "codex://".len()..];
+    let end = tail
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(tail.len());
+    tail[..end].to_string()
 }
 
 #[cfg(test)]
@@ -290,6 +419,7 @@ mod tests {
             subtask_text: "Hello worker".into(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 5,
+            session_id: None,
         };
 
         let wh = tokio::spawn(async move { echo_once(&worker).await });
@@ -324,6 +454,7 @@ mod tests {
                 capability: "summarize".into(),
             },
             timeout_secs: 5,
+            session_id: None,
         };
 
         let sh = tokio::spawn(async move { echo_once(&summarizer).await });
@@ -353,6 +484,7 @@ mod tests {
                 capability: "image".into(),
             },
             timeout_secs: 1,
+            session_id: None,
         };
 
         let err = orchestrator.delegate_task(&request).await.unwrap_err();
@@ -378,6 +510,7 @@ mod tests {
             subtask_text: "Nobody home".into(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 1,
+            session_id: None,
         };
 
         let err = orchestrator.delegate_task(&request).await.unwrap_err();
@@ -418,6 +551,7 @@ mod tests {
                 subtask_text: format!("round-robin task {i}"),
                 strategy: DelegationStrategy::RoundRobin,
                 timeout_secs: 5,
+                session_id: None,
             };
             let result = orchestrator.delegate_task(&request).await.unwrap();
             assert!(result.success, "task {i} should succeed");
@@ -451,6 +585,7 @@ mod tests {
             subtask_text: "No reply expected".into(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 1,
+            session_id: None,
         };
 
         let result = orchestrator.delegate_task(&request).await.unwrap();
@@ -476,6 +611,7 @@ mod tests {
             subtask_text: "Broadcast task".into(),
             strategy: DelegationStrategy::BroadcastCollect,
             timeout_secs: 10,
+            session_id: None,
         };
 
         let ha = tokio::spawn(async move { echo_once(&worker_a).await });
@@ -516,6 +652,7 @@ mod tests {
             subtask_text: "Nobody".into(),
             strategy: DelegationStrategy::BroadcastCollect,
             timeout_secs: 1,
+            session_id: None,
         };
 
         let err = orchestrator.delegate_broadcast(&request).await.unwrap_err();
@@ -545,6 +682,7 @@ mod tests {
                 capability: "text".into(),
             },
             timeout_secs: 2,
+            session_id: None,
         };
 
         let wh = tokio::spawn(async move { echo_once(&worker).await });
@@ -581,6 +719,7 @@ mod tests {
             subtask_text: "Quick task".into(),
             strategy: DelegationStrategy::FirstAvailable,
             timeout_secs: 0, // should fall back to DEFAULT_DELEGATION_TIMEOUT_SECS
+            session_id: None,
         };
 
         let wh = tokio::spawn(async move { echo_once(&worker).await });

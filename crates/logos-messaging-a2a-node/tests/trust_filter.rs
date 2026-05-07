@@ -29,6 +29,7 @@ fn entry(pubkey: &str, nickname: &str, caps: &[&str]) -> TrustEntry {
         capabilities: caps.iter().map(|s| s.to_string()).collect(),
         notes: None,
         added_at: SystemTime::UNIX_EPOCH,
+        encryption_pubkey: None,
     }
 }
 
@@ -226,6 +227,7 @@ async fn outgoing_capability_match_filters_to_trusted_peers() {
             waku_topic: format!("/lmao/1/task-{}/proto", peer.pubkey()),
             ttl_secs: 60,
             signature: None,
+            sealed_status: vec![],
         };
         alice.peers().update(&announcement);
     }
@@ -262,6 +264,7 @@ async fn outgoing_capability_match_filters_to_trusted_peers() {
             capability: "code".into(),
         },
         timeout_secs: 3,
+        session_id: None,
     };
     let result = alice.delegate_task(&req).await.unwrap();
 
@@ -296,6 +299,7 @@ async fn delegate_errors_when_no_trusted_peer_advertises_capability() {
         waku_topic: format!("/lmao/1/task-{}/proto", charlie.pubkey()),
         ttl_secs: 60,
         signature: None,
+            sealed_status: vec![],
     });
 
     let req = DelegationRequest {
@@ -305,6 +309,7 @@ async fn delegate_errors_when_no_trusted_peer_advertises_capability() {
             capability: "code".into(),
         },
         timeout_secs: 1,
+        session_id: None,
     };
     let err = alice.delegate_task(&req).await.unwrap_err();
     let msg = format!("{err}");

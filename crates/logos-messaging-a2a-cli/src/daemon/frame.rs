@@ -81,6 +81,8 @@ mod tests {
                 uptime_secs: 7,
                 socket_path: PathBuf::from("/tmp/lmao.sock"),
                 storage_enabled: true,
+                encryption_pubkey: None,
+                load: None,
             },
             Response::ShutdownAck,
             Response::Error {

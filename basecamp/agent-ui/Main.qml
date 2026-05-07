@@ -172,6 +172,15 @@ Item {
         id: dcb
         height: theme.controlHeight
         font.pixelSize: theme.fontBody
+        // Reserve breathing room top + bottom so the text doesn't
+        // hug the rounded border (the editable mode's internal
+        // TextField is what tightens it). Inheritable padding props
+        // — picked up by both the contentItem and Qt's editable
+        // TextField path.
+        topPadding: 6
+        bottomPadding: 6
+        leftPadding: theme.spaceSmall + 2
+        rightPadding: 24    // room for the caret indicator
 
         background: Rectangle {
             radius: theme.radiusMedium
@@ -184,8 +193,8 @@ Item {
             color: theme.text
             font: dcb.font
             verticalAlignment: Text.AlignVCenter
-            leftPadding: theme.spaceSmall + 2
             elide: Text.ElideRight
+            // Padding handled by the parent ComboBox.
         }
         indicator: Canvas {
             id: caret
@@ -208,7 +217,11 @@ Item {
         }
         popup: Popup {
             y: dcb.height + 2
-            width: dcb.width
+            // Don't shrink-wrap to the combo's parent layout — the
+            // capability popup should always be wide enough to show
+            // full strings comfortably even when the combo itself
+            // sits in a tight row.
+            width: Math.max(dcb.width, 220)
             implicitHeight: Math.min(contentItem.implicitHeight + 8, 240)
             padding: 4
             background: Rectangle {
@@ -225,7 +238,7 @@ Item {
             }
         }
         delegate: ItemDelegate {
-            width: dcb.width - 8
+            width: parent ? parent.width : dcb.width
             height: 28
             highlighted: dcb.highlightedIndex === index
             contentItem: Text {
@@ -233,6 +246,7 @@ Item {
                 color: theme.text
                 font: dcb.font
                 verticalAlignment: Text.AlignVCenter
+                leftPadding: theme.spaceSmall
             }
             background: Rectangle {
                 color: highlighted ? theme.borderDark : "transparent"
@@ -257,6 +271,43 @@ Item {
     function shorten(s, n) {
         if (!s) return "";
         return s.length > n ? s.substring(0, n) + "…" : s;
+    }
+
+    /// Look up a peer's display name by pubkey from the live peer
+    /// list. Used in the task cards so completed delegations show
+    /// "→ alice" instead of the unfriendly "→ 0242c474c3c0a4…" hex.
+    /// Falls back to a shortened pubkey when the peer isn't in the
+    /// current map (likely went offline since the task was sent).
+    function peerLabel(pubkey) {
+        if (!pubkey) return "";
+        for (let i = 0; i < peersModel.count; i++) {
+            const p = peersModel.get(i);
+            if (p.agent_id === pubkey && p.name) return p.name;
+        }
+        return shorten(pubkey, 14);
+    }
+
+    // Live capability index, deduped + sorted from the latest peers
+    // refresh. Drives the Delegate-pane combo so the operator picks
+    // from what's actually online rather than guessing capability
+    // strings.
+    property var availableCapabilities: []
+
+    // One-shot session id consumed by the next Delegate click. Set by
+    // the "Follow up" button on a finished task card; cleared in
+    // delegateBtn.onClicked so the next ad-hoc delegate starts fresh.
+    // When non-empty, the receiver's exec runs with LMAO_SESSION_ID set
+    // and reuses a per-thread session (pi --session, lemonade history).
+    property string pendingSessionId: ""
+
+    // Transient hint shown next to the Delegate input after the
+    // operator clicks a peer in the Peers list. Cleared by the timer
+    // below so it doesn't linger forever.
+    property string targetedPeerName: ""
+    Timer {
+        id: targetedPeerHintTimer
+        interval: 4000
+        onTriggered: root.targetedPeerName = ""
     }
 
     // ── Status pane state ────────────────────────────────────────
@@ -317,6 +368,11 @@ Item {
         statusCapabilities = obj.capabilities || [];
         statusUptimeSecs = obj.uptime_secs || 0;
         statusStorageEnabled = obj.storage_enabled === true;
+        // First time the daemon comes up — pull persisted history.
+        // refreshStatus is called every 5s by statusTimer, so this
+        // also covers the case where the daemon was offline at QML
+        // load time.
+        if (!historyLoaded) loadHistory();
     }
 
     Component.onCompleted: {
@@ -334,6 +390,61 @@ Item {
             logos.onModuleEvent("agent", "delegate_complete");
             logos.onModuleEvent("agent", "fetch_cid_complete");
         }
+        // Try to load persisted history. Daemon may not be ready yet —
+        // historyPollTimer retries until it gets a parseable response.
+        loadHistory();
+    }
+
+    // ── History bootstrap ────────────────────────────────────────
+    // The daemon owns task history (JSONL log next to its storage dir).
+    // On startup we ask for the most recent N rows and seed tasksModel
+    // with them so the operator sees their previous tasks across
+    // basecamp restarts. Live updates from delegate_complete still
+    // append at index 0 the same way.
+
+    property bool historyLoaded: false
+
+    function loadHistory() {
+        if (historyLoaded) return;
+        if (root.daemonState !== "ready") return;  // wait for daemon
+        const raw = logos.callModule("agent", "task_history_list",
+                                     [50, 0, "delegated", ""]);
+        const obj = root.parseModuleJson(raw);
+        if (!obj || obj.error) {
+            console.warn("agent_ui: history load failed:",
+                         obj && obj.error ? obj.error : raw);
+            return;
+        }
+        const entries = obj.entries || [];
+        // tasksModel is empty at this point (fresh QML). Append in
+        // arrival order; reorderTasksBySession() at the end groups
+        // session blocks contiguously and bubbles the latest thread
+        // to the top.
+        for (let i = 0; i < entries.length; i++) {
+            const e = entries[i];
+            tasksModel.append({
+                task_id:     e.task_id || "",
+                status:      e.success ? "done" : "error",
+                capability:  e.capability || "",
+                text:        e.text || "",
+                agent_id:    e.peer_pubkey || "",
+                body:        e.body || "",
+                cid:         e.cid || "",
+                cidPayload:  "",
+                cidLoading:  false,
+                cidExpanded: false,
+                elapsedSecs: ((e.elapsed_ms || 0) / 1000).toFixed(1),
+                error:       e.error || "",
+                startedAt:   e.created_at_ms || 0,
+                // Field must always be present so the QML model
+                // declares the role (otherwise delegate onClicked
+                // hits ReferenceError when reading it). Real session
+                // ids come from the daemon's HistoryEntry.session_id.
+                session_id:  e.session_id || ""
+            });
+        }
+        reorderTasksBySession();
+        historyLoaded = true;
     }
     Timer {
         id: statusTimer
@@ -376,9 +487,113 @@ Item {
 
     // Tasks: a single ListModel for both running and completed
     // delegations. Each row carries everything the UI needs to render
-    // it; index 0 is newest. tasks.list and the Network-tab ListView
-    // share this model.
+    // it. Order is "session-grouped, recency-first": same-session
+    // cards are adjacent so they read as a thread; threads are sorted
+    // so the most recently active one floats to the top. Mutate via
+    // insertTaskInOrder()/reorderTasksBySession() — never `insert(0)`
+    // directly, or the visual threading breaks.
     ListModel { id: tasksModel }
+
+    // ── Session grouping helpers ────────────────────────────────────
+    //
+    // We don't change the row schema or build a derived model — too
+    // invasive given the size of the existing card delegate. Instead
+    // tasksModel is kept session-grouped so the existing flat ListView
+    // *looks* threaded, and the delegate adds head/tail decoration by
+    // peeking at adjacent rows.
+
+    function _sessionKey(t) {
+        if (!t) return "";
+        if (t.session_id) return t.session_id;
+        // Backward-compat: tasks created before auto-session-stamping
+        // landed have an empty session_id. If any newer task in the
+        // model references THIS task's task_id as their session_id
+        // (i.e. they were a Follow-up of us), treat us as the head of
+        // that thread by adopting our task_id as the session key.
+        for (let i = 0; i < tasksModel.count; i++) {
+            const r = tasksModel.get(i);
+            if (r && r.session_id && r.session_id === t.task_id) {
+                return t.task_id;
+            }
+        }
+        // Otherwise it's a true single-shot. "solo:<id>" keeps it in
+        // its own group so the chain visuals don't kick in.
+        return "solo:" + t.task_id;
+    }
+
+    /// Count how many turns share `key` in the current tasksModel.
+    /// Used by the head-card's thread badge.
+    function _threadTurnCount(key) {
+        let n = 0;
+        for (let i = 0; i < tasksModel.count; i++) {
+            if (_sessionKey(tasksModel.get(i)) === key) n++;
+        }
+        return n;
+    }
+
+    /// Insert a freshly-created task so its session block stays
+    /// contiguous and bubbles to the top. Handles three cases:
+    ///   1. New session: prepend, becomes the top thread.
+    ///   2. Existing session: append at the end of that block, then
+    ///      bubble the whole block to the top of the list.
+    function insertTaskInOrder(t) {
+        const sid = _sessionKey(t);
+        let firstIdx = -1, lastIdx = -1;
+        for (let i = 0; i < tasksModel.count; i++) {
+            const k = _sessionKey(tasksModel.get(i));
+            if (k === sid) {
+                if (firstIdx === -1) firstIdx = i;
+                lastIdx = i;
+            }
+        }
+        if (firstIdx === -1) {
+            tasksModel.insert(0, t);
+            return;
+        }
+        const insertAt = lastIdx + 1;
+        tasksModel.insert(insertAt, t);
+        // Block now occupies [firstIdx .. insertAt]. Bubble it to top.
+        const blockLen = insertAt - firstIdx + 1;
+        if (firstIdx > 0) {
+            tasksModel.move(firstIdx, 0, blockLen);
+        }
+    }
+
+    /// One-shot reorder used after batch loads (history). Sorts so
+    /// (1) sessions are grouped contiguously and (2) sessions sort by
+    /// most recent turn descending.
+    function reorderTasksBySession() {
+        if (tasksModel.count <= 1) return;
+        const rows = [];
+        const recency = {};
+        for (let i = 0; i < tasksModel.count; i++) {
+            const r = tasksModel.get(i);
+            const copy = {};
+            // Copy each role explicitly — JSON.parse(stringify(get(i)))
+            // drops nested QML types defensively.
+            const keys = ["task_id", "status", "capability", "text",
+                          "agent_id", "body", "cid", "cidPayload",
+                          "cidLoading", "cidExpanded", "elapsedSecs",
+                          "error", "startedAt", "session_id"];
+            for (const k of keys) copy[k] = r[k];
+            const sk = _sessionKey(r);
+            copy._sk = sk;
+            rows.push(copy);
+            const t = r.startedAt || 0;
+            if (!recency[sk] || t > recency[sk]) recency[sk] = t;
+        }
+        rows.sort(function(a, b) {
+            if (recency[b._sk] !== recency[a._sk]) {
+                return recency[b._sk] - recency[a._sk];
+            }
+            return (a.startedAt || 0) - (b.startedAt || 0);
+        });
+        tasksModel.clear();
+        for (const r of rows) {
+            delete r._sk;
+            tasksModel.append(r);
+        }
+    }
 
     function handleDelegateComplete(obj) {
         if (!obj.task_id) return;
@@ -399,11 +614,12 @@ Item {
                 ((obj.elapsed_ms || 0) / 1000).toFixed(1));
             tasksModel.setProperty(i, "error", obj.error || "");
 
-            // Auto-prefetch the audit log so it's locally cached when
-            // the operator clicks "View log".
-            if (obj.success && obj.cid) {
-                logos.callModule("agent", "start_fetch_cid", [obj.cid]);
-            }
+            // Audit-log fetch is opt-in — click "View log". We previously
+            // auto-prefetched here, but calling start_fetch_cid synchronously
+            // from inside the moduleEventReceived handler hung the agent's
+            // logos_host reply path (the InvokeReplyPacket never went out and
+            // every subsequent callModule queued for 20s). Triggering on user
+            // click sidesteps the re-entrant call.
             return;
         }
     }
@@ -412,11 +628,11 @@ Item {
         if (!obj.cid) return;
         let payload = "";
         if (obj.success) {
-            try {
-                payload = atob(obj.payload_b64 || "");
-            } catch (e) {
-                payload = "(non-UTF-8 payload)";
-            }
+            const raw = obj.payload_b64 || "";
+            console.log("[fetch_cid] payload_b64 len=" + raw.length
+                + " typeof=" + (typeof raw)
+                + " head=" + raw.substring(0, 80));
+            payload = root._decodeBase64Utf8(raw);
         } else {
             payload = "Error: " + (obj.error || "fetch failed");
         }
@@ -427,6 +643,55 @@ Item {
                 tasksModel.setProperty(i, "cidPayload", payload);
                 tasksModel.setProperty(i, "cidLoading", false);
             }
+        }
+    }
+
+    // Standard base64 alphabet for the pure-JS decoder. Index = value.
+    readonly property string _b64Alphabet:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+    /// Decode a base64 string into UTF-8 text. We can't rely on the
+    /// browser-only `atob()` here — QML's JS engine doesn't expose it,
+    /// so the obvious `atob` call throws ReferenceError.
+    /// Implement the decode in pure JS, then UTF-8-decode the byte
+    /// stream via the classic `decodeURIComponent(escape(...))` trick.
+    function _decodeBase64Utf8(b64) {
+        if (!b64) return "";
+        // Strip whitespace + URL-safe variants the daemon shouldn't
+        // emit but might in the future.
+        let s = b64.replace(/[\r\n\t ]/g, "")
+                   .replace(/-/g, "+").replace(/_/g, "/");
+        // Strip trailing `=` padding for parsing simplicity (we drive
+        // the loop by index, padding doesn't carry data).
+        while (s.length > 0 && s[s.length - 1] === "=") {
+            s = s.substring(0, s.length - 1);
+        }
+        const alpha = root._b64Alphabet;
+        const lookup = {};
+        for (let i = 0; i < alpha.length; i++) lookup[alpha[i]] = i;
+        let bin = "";
+        let buf = 0, bits = 0;
+        for (let i = 0; i < s.length; i++) {
+            const v = lookup[s[i]];
+            if (v === undefined) {
+                // Unknown char — bail out so caller sees something.
+                return "(unrecognised character in base64 at offset " + i + ")";
+            }
+            buf = (buf << 6) | v;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                bin += String.fromCharCode((buf >> bits) & 0xff);
+            }
+        }
+        // bin is a "binary string" — each char is one byte. Convert
+        // it to UTF-8 via the escape/decodeURIComponent trick. If the
+        // bytes happen to not be valid UTF-8, fall back to the raw
+        // string so we still show something.
+        try {
+            return decodeURIComponent(escape(bin));
+        } catch (e) {
+            return bin;
         }
     }
 
@@ -650,11 +915,13 @@ Item {
             Layout.fillHeight: true
             spacing: 12
 
-            // ── Peers pane ──
+            // ── Peers pane (sidebar — narrow column) ──
             Rectangle {
-                Layout.fillWidth: true
+                Layout.fillWidth: false
                 Layout.fillHeight: true
-                Layout.preferredWidth: 1
+                Layout.preferredWidth: 320
+                Layout.minimumWidth: 280
+                Layout.maximumWidth: 380
                 color: theme.backgroundSecondary
                 radius: 6
                 border.color: theme.border
@@ -674,10 +941,21 @@ Item {
                             font.weight: Font.DemiBold
                             Layout.fillWidth: true
                         }
-                        DarkTextField {
+                        DarkComboBox {
                             id: peersFilter
-                            placeholderText: "filter capability"
-                            Layout.preferredWidth: 140
+                            Layout.preferredWidth: 160
+                            // "" = no filter, then each available
+                            // capability. Refresh fires on selection
+                            // change — keeps the list responsive.
+                            model: [""].concat(root.availableCapabilities)
+                            displayText: currentText.length === 0
+                                ? "all capabilities"
+                                : "cap: " + currentText
+                            // Helper used by the refresh() function to
+                            // pass the same arg shape as the old
+                            // text field (empty = no filter).
+                            property string text: currentText
+                            onActivated: peersList.refresh()
                         }
                         DarkButton {
                             text: "Refresh"
@@ -700,9 +978,11 @@ Item {
                             peersModel.clear();
                             if (!obj || obj.error) {
                                 if (obj && obj.error) console.warn("peers:", obj.error);
+                                root.availableCapabilities = [];
                                 return;
                             }
                             const peers = obj.peers || [];
+                            const seen = {};
                             for (let i = 0; i < peers.length; i++) {
                                 const p = peers[i];
                                 // Pre-flatten capabilities into a comma-string
@@ -711,13 +991,24 @@ Item {
                                 const caps = Array.isArray(p.capabilities)
                                     ? p.capabilities
                                     : (p.capabilities ? [p.capabilities] : []);
+                                const load = p.load || {};
                                 peersModel.append({
                                     name: p.name || "",
                                     agent_id: p.agent_id || "",
                                     capsCsv: caps.join(", "),
-                                    firstCap: caps[0] || ""
+                                    firstCap: caps[0] || "",
+                                    loadBucket: load.bucket || "",
+                                    queueDepth: load.queue_depth || 0,
+                                    maxConcurrent: load.max_concurrent || 0,
                                 });
+                                for (let j = 0; j < caps.length; j++) {
+                                    seen[caps[j]] = true;
+                                }
                             }
+                            // Capabilities surfaced as a deduped, sorted list
+                            // so the Delegate-pane combo stays stable as
+                            // peers come and go.
+                            root.availableCapabilities = Object.keys(seen).sort();
                         }
 
                         delegate: Rectangle {
@@ -731,12 +1022,13 @@ Item {
                             border.color: peerArea.containsMouse ? theme.primary : theme.borderSubtle
                             border.width: 1
 
-                            // Click-to-prefill: populates the Delegate
+                            // Click-to-target: prefill the Delegate
                             // pane's Capability with this peer's first
-                            // capability so a delegation goes to it on
-                            // the next click. The trust filter still
-                            // applies — peers that aren't trusted will
-                            // be skipped even if "selected" here.
+                            // capability AND raise a brief "→ targeting
+                            // <peer>" hint so the click feels alive.
+                            // The trust filter still applies — peers
+                            // that aren't trusted will be skipped even
+                            // if "selected" here.
                             MouseArea {
                                 id: peerArea
                                 anchors.fill: parent
@@ -744,9 +1036,10 @@ Item {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     if (model.firstCap) {
-                                        delegateCap.text = model.firstCap;
+                                        delegateCap.setText(model.firstCap);
                                     }
-                                    peersFilter.text = "";
+                                    root.targetedPeerName = model.name || "";
+                                    targetedPeerHintTimer.restart();
                                     delegateText.forceActiveFocus();
                                 }
                             }
@@ -769,6 +1062,38 @@ Item {
                                         color: theme.successSoft
                                         font.pixelSize: 13
                                         font.weight: Font.DemiBold
+                                    }
+                                    Rectangle {
+                                        // Capacity chip — only shown when the
+                                        // peer has shipped a sealed envelope
+                                        // we could decrypt. "Free" is green,
+                                        // "Busy" amber, "Full" red.
+                                        visible: model.loadBucket && model.loadBucket.length > 0
+                                        radius: 3
+                                        implicitWidth: loadLabel.implicitWidth + 10
+                                        implicitHeight: loadLabel.implicitHeight + 4
+                                        color: {
+                                            if (model.loadBucket === "free") return Qt.rgba(0.49, 0.83, 0.39, 0.18);
+                                            if (model.loadBucket === "busy") return Qt.rgba(0.95, 0.70, 0.20, 0.20);
+                                            if (model.loadBucket === "full") return Qt.rgba(0.95, 0.30, 0.30, 0.22);
+                                            return "transparent";
+                                        }
+                                        border.width: 1
+                                        border.color: {
+                                            if (model.loadBucket === "free") return Qt.rgba(0.49, 0.83, 0.39, 0.5);
+                                            if (model.loadBucket === "busy") return Qt.rgba(0.95, 0.70, 0.20, 0.6);
+                                            if (model.loadBucket === "full") return Qt.rgba(0.95, 0.30, 0.30, 0.7);
+                                            return "transparent";
+                                        }
+                                        Text {
+                                            id: loadLabel
+                                            anchors.centerIn: parent
+                                            text: model.loadBucket + " " +
+                                                  model.queueDepth + "/" + model.maxConcurrent
+                                            color: theme.text
+                                            font.pixelSize: 9
+                                            font.weight: Font.Medium
+                                        }
                                     }
                                     Text {
                                         text: "·"
@@ -827,11 +1152,10 @@ Item {
                 }
             }
 
-            // ── Delegate pane ──
+            // ── Delegate + Tasks pane (hero — fills remaining width) ──
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.preferredWidth: 1
                 color: theme.backgroundSecondary
                 radius: 6
                 border.color: theme.border
@@ -842,11 +1166,26 @@ Item {
                     anchors.margins: 12
                     spacing: 8
 
-                    Text {
-                        text: "Delegate task"
-                        color: theme.text
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Delegate task"
+                            color: theme.text
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                            Layout.fillWidth: true
+                        }
+                        Text {
+                            // Brief flash when a peer is clicked in
+                            // the left pane — gives the click feedback
+                            // and tells the operator their next
+                            // delegate will favour that peer.
+                            visible: root.targetedPeerName.length > 0
+                            text: "→ targeting " + root.targetedPeerName
+                            color: theme.primary
+                            font.pixelSize: 11
+                            font.italic: true
+                        }
                     }
 
                     RowLayout {
@@ -857,10 +1196,30 @@ Item {
                             font.pixelSize: 12
                             Layout.preferredWidth: 80
                         }
-                        DarkTextField {
+                        // Capability picker. Editable so the operator
+                        // can still type a capability that isn't in
+                        // the live peer list (useful for offline-first
+                        // demos where the receiver hasn't announced
+                        // yet). Exposes a `text` alias matching the
+                        // old TextField API so call sites keep working.
+                        DarkComboBox {
                             id: delegateCap
                             Layout.fillWidth: true
-                            placeholderText: "e.g. code, summarize, text"
+                            editable: true
+                            model: root.availableCapabilities
+                            // Auto-select the first available capability
+                            // once peers have announced and the operator
+                            // hasn't typed anything yet.
+                            onModelChanged: {
+                                if (editText.length === 0
+                                    && root.availableCapabilities.length > 0) {
+                                    editText = root.availableCapabilities[0];
+                                }
+                            }
+                            // ComboBox uses `editText` for the editable
+                            // text. Old call sites used `.text =` /
+                            // `.text.length`. Forward to editText.
+                            function setText(s) { editText = s }
                         }
                     }
 
@@ -897,6 +1256,49 @@ Item {
                         }
                     }
 
+                    // Follow-up banner — visible only after the operator
+                    // clicks "Follow up" on a finished task card. Shows
+                    // which thread the next Delegate click will join, and
+                    // gives them a Cancel out so they can fire a fresh
+                    // task instead.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: root.pendingSessionId.length > 0
+                        Layout.preferredHeight: visible ? 30 : 0
+                        radius: theme.radiusSmall
+                        color: Qt.rgba(0.93, 0.48, 0.35, 0.10)  // primary tint
+                        border.color: theme.primary
+                        border.width: 1
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 4
+                            spacing: 8
+
+                            Text {
+                                text: "↪  Following up on " +
+                                      root.shorten(root.pendingSessionId, 12) +
+                                      " — receiver reuses the conversation"
+                                color: theme.primary
+                                font.pixelSize: 11
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                text: "Cancel"
+                                color: theme.primary
+                                font.pixelSize: 11
+                                font.underline: true
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.pendingSessionId = ""
+                                }
+                            }
+                        }
+                    }
+
                     // Delegate launcher — fire-and-forget. The
                     // start_delegate IPC returns instantly with a
                     // task_id; the work runs on a worker thread and
@@ -908,22 +1310,32 @@ Item {
 
                         DarkPrimaryButton {
                             id: delegateBtn
-                            text: "Delegate"
-                            enabled: delegateCap.text.length > 0
+                            // Button label changes to "Follow up" when
+                            // pendingSessionId is armed so the operator
+                            // sees what the click is going to do.
+                            text: root.pendingSessionId.length > 0 ? "Follow up" : "Delegate"
+                            enabled: delegateCap.editText.length > 0
                                      && delegateText.text.length > 0
                                      && root.daemonState === "ready"
 
                             onClicked: {
+                                // Pending-session-id is set by "Follow up"
+                                // (line below) so the receiver reuses the
+                                // same conversation thread instead of
+                                // cold-starting. Cleared after each click
+                                // so the next ad-hoc delegate is fresh.
+                                const sid = root.pendingSessionId;
+                                root.pendingSessionId = "";
                                 const ackRaw = logos.callModule("agent", "start_delegate",
-                                    [delegateCap.text, delegateText.text]);
+                                    [delegateCap.editText, delegateText.text, sid]);
                                 const ack = root.parseModuleJson(ackRaw);
                                 if (!ack || ack.error || !ack.task_id) {
                                     // Surface the failure as a synthetic
                                     // task card so the user sees something.
-                                    tasksModel.insert(0, {
+                                    insertTaskInOrder({
                                         task_id: "err-" + Date.now(),
                                         status: "error",
-                                        capability: delegateCap.text,
+                                        capability: delegateCap.editText,
                                         text: delegateText.text,
                                         agent_id: "",
                                         body: "",
@@ -934,14 +1346,15 @@ Item {
                                         elapsedSecs: "0",
                                         error: (ack && ack.error)
                                             ? ack.error : "no task_id from agent",
-                                        startedAt: Date.now()
+                                        startedAt: Date.now(),
+                                        session_id: sid
                                     });
                                     return;
                                 }
-                                tasksModel.insert(0, {
+                                insertTaskInOrder({
                                     task_id: ack.task_id,
                                     status: "running",
-                                    capability: delegateCap.text,
+                                    capability: delegateCap.editText,
                                     text: delegateText.text,
                                     agent_id: "",
                                     body: "",
@@ -951,7 +1364,12 @@ Item {
                                     cidExpanded: false,
                                     elapsedSecs: "0",
                                     error: "",
-                                    startedAt: Date.now()
+                                    startedAt: Date.now(),
+                                    // Use the agent-module's echoed
+                                    // session_id — auto-stamped when sid
+                                    // was empty so Follow up has a real
+                                    // session to attach to.
+                                    session_id: ack.session_id || sid
                                 });
                                 // Clear the task text so the user can
                                 // start typing the next one immediately.
@@ -1018,22 +1436,76 @@ Item {
                         delegate: Rectangle {
                             id: taskCard
                             property bool expanded: status === "running"
-                            width: ListView.view.width
+                            // ── threading: peek at adjacent rows so we
+                            // can render a connected-thread frame
+                            // without restructuring the model. A row is
+                            // a "thread head" if the row above has a
+                            // different session, "tail" if the row
+                            // below differs. Single-card threads are
+                            // both head AND tail and render normally.
+                            property string mySessionKey: root._sessionKey({
+                                session_id: session_id, task_id: task_id
+                            })
+                            property string prevSessionKey: index > 0
+                                ? root._sessionKey(tasksModel.get(index - 1))
+                                : ""
+                            property string nextSessionKey: index < tasksModel.count - 1
+                                ? root._sessionKey(tasksModel.get(index + 1))
+                                : ""
+                            property bool isThreadHead: mySessionKey !== prevSessionKey
+                            property bool isThreadTail: mySessionKey !== nextSessionKey
+                            property bool inThread: !(isThreadHead && isThreadTail)
+                            // Indent follow-up cards so the chain reads
+                            // as nested under the head. Use a child
+                            // wrapper that's anchored with a left
+                            // margin instead of resizing the delegate
+                            // itself — that way `ListView.view.width`
+                            // attached-property quirks during reorder
+                            // can't collapse the card to zero-width.
+                            property int threadIndent: (inThread && !isThreadHead) ? 24 : 0
+                            width: ListView.view ? ListView.view.width : 0
                             height: cardCol.implicitHeight + 16
-                            color: theme.backgroundElevated
-                            radius: theme.radiusMedium
-                            border.color: status === "running" ? theme.primary
-                                : status === "error"   ? theme.error
-                                : theme.borderSubtle
-                            border.width: 1
+                            color: "transparent"
+                            border.width: 0
+                            // Visual frame moved into a child rect so
+                            // we can offset it by threadIndent without
+                            // touching the delegate geometry. The
+                            // delegate itself stays transparent and
+                            // full-width.
+                            Rectangle {
+                                id: cardFrame
+                                anchors.fill: parent
+                                anchors.leftMargin: taskCard.threadIndent
+                                color: theme.backgroundElevated
+                                radius: theme.radiusMedium
+                                border.color: status === "running" ? theme.primary
+                                    : status === "error"   ? theme.error
+                                    : theme.borderSubtle
+                                border.width: 1
+
+                                // Vertical connector line on the LEFT
+                                // edge of follow-up cards so the chain
+                                // reads visually. Drawn inside cardFrame
+                                // so it inherits the indent.
+                                Rectangle {
+                                    visible: taskCard.inThread && !taskCard.isThreadHead
+                                    width: 2
+                                    color: theme.borderSubtle
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: -14  // sits in the indent gap
+                                    anchors.top: parent.top
+                                    anchors.topMargin: -8    // bridge spacing above
+                                    anchors.bottom: parent.bottom
+                                }
+                            }
 
                             Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
 
                             ColumnLayout {
                                 id: cardCol
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
+                                anchors.left: cardFrame.left
+                                anchors.right: cardFrame.right
+                                anchors.top: cardFrame.top
                                 anchors.leftMargin: 12
                                 anchors.rightMargin: 12
                                 anchors.topMargin: 8
@@ -1041,8 +1513,34 @@ Item {
 
                                 // ── header row: status + caps + peer + time
                                 RowLayout {
+                                    id: cardHeaderRow
                                     Layout.fillWidth: true
                                     spacing: 8
+
+                                    // Thread badge — only on the head
+                                    // card when this thread has > 1
+                                    // turn. Inline so it doesn't add a
+                                    // dedicated row of vertical space.
+                                    Rectangle {
+                                        visible: taskCard.isThreadHead
+                                            && root._threadTurnCount(taskCard.mySessionKey) > 1
+                                        radius: 3
+                                        color: Qt.rgba(0.475, 0.753, 1, 0.12)
+                                        border.color: theme.info
+                                        border.width: 1
+                                        implicitWidth: threadBadge.implicitWidth + 10
+                                        implicitHeight: threadBadge.implicitHeight + 3
+                                        Text {
+                                            id: threadBadge
+                                            anchors.centerIn: parent
+                                            text: "thread · " +
+                                                root._threadTurnCount(taskCard.mySessionKey) +
+                                                " turns"
+                                            color: theme.info
+                                            font.pixelSize: 9
+                                            font.weight: Font.Medium
+                                        }
+                                    }
 
                                     // Status indicator. Running: pulsing
                                     // dot only (no pill — would compete
@@ -1102,10 +1600,15 @@ Item {
                                     }
                                     Text {
                                         visible: agent_id.length > 0
-                                        text: "→ " + root.shorten(agent_id, 14)
+                                        text: "→ " + root.peerLabel(agent_id)
                                         color: theme.successSoft
                                         font.pixelSize: 11
-                                        font.family: "monospace"
+                                        // Stay monospace for plain hex
+                                        // fallback; switch to default
+                                        // font when we have a name.
+                                        font.family: root.peerLabel(agent_id)
+                                            === root.shorten(agent_id, 14)
+                                                ? "monospace" : ""
                                     }
                                     Text {
                                         visible: status !== "running"
@@ -1113,21 +1616,74 @@ Item {
                                         color: theme.textMuted
                                         font.pixelSize: 11
                                     }
-                                    Item { Layout.fillWidth: true }
+                                    // One-line prompt preview — fills
+                                    // the otherwise-empty header space
+                                    // on collapsed cards. Elided so the
+                                    // chevron stays at the right edge.
+                                    // Hidden when expanded because the
+                                    // full prompt is rendered in the
+                                    // body below.
+                                    //
+                                    // Use `model.text` instead of bare
+                                    // `text` because the Text item's
+                                    // own `text` property would shadow
+                                    // the model role.
                                     Text {
+                                        visible: !taskCard.expanded
+                                            && (model.text || "").length > 0
+                                        Layout.fillWidth: true
+                                        text: "“" + (model.text || "").replace(/\s+/g, " ").trim() + "”"
+                                        color: theme.textSecondary
+                                        font.pixelSize: 11
+                                        font.italic: true
+                                        elide: Text.ElideRight
+                                        maximumLineCount: 1
+                                    }
+                                    // Spacer only when no preview is
+                                    // visible (running state, blank
+                                    // prompt) so the chevron stays
+                                    // right-justified.
+                                    Item {
+                                        visible: taskCard.expanded
+                                            || (model.text || "").length === 0
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        // Chevron is a visual affordance.
+                                        // The whole header row is clickable
+                                        // via the MouseArea anchored to it
+                                        // below the RowLayout in z-order.
                                         text: taskCard.expanded ? "▾" : "▸"
                                         color: theme.textSecondary
                                         font.pixelSize: 11
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: taskCard.expanded = !taskCard.expanded
-                                        }
                                     }
                                 }
 
-                                // task text (always shown, single-line collapsed)
+                                // Header click target. Anchored to the
+                                // header row so only the header toggles
+                                // expand/collapse — the expanded body's
+                                // buttons keep their own click handling.
+                                // Sits at the top of cardCol; z=-1 so
+                                // child Text/Rectangle items in the
+                                // RowLayout don't intercept its clicks
+                                // (they have no MouseArea of their own).
+                                MouseArea {
+                                    anchors.fill: cardHeaderRow
+                                    z: -1
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: taskCard.expanded = !taskCard.expanded
+                                }
+
+                                // Body-row prompt display — was shown
+                                // both collapsed and expanded. Now
+                                // redundant: collapsed cards show the
+                                // prompt as an inline preview in the
+                                // header row, expanded cards show the
+                                // full prompt in the scrollable
+                                // "Prompt" panel below. Hidden so the
+                                // collapsed card stays compact.
                                 Text {
+                                    visible: false
                                     text: text
                                     color: theme.textSecondary
                                     font.pixelSize: 11
@@ -1137,12 +1693,55 @@ Item {
                                     Layout.fillWidth: true
                                 }
 
-                                // ── expanded section: response + actions
+                                // ── expanded section: prompt + response + actions
                                 ColumnLayout {
                                     visible: taskCard.expanded && status !== "running"
                                     Layout.fillWidth: true
                                     spacing: 6
 
+                                    // Prompt panel — re-display the task
+                                    // input so the operator can see what
+                                    // they're about to re-run / follow up
+                                    // on without having to remember.
+                                    Text {
+                                        text: "Prompt"
+                                        color: theme.textMuted
+                                        font.pixelSize: 10
+                                        font.weight: Font.Medium
+                                    }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(promptTxt.implicitHeight + 16, 160)
+                                        color: theme.background
+                                        border.color: theme.borderSubtle
+                                        border.width: 1
+                                        radius: theme.radiusSmall
+
+                                        ScrollView {
+                                            anchors.fill: parent
+                                            anchors.margins: 1
+                                            clip: true
+                                            TextArea {
+                                                id: promptTxt
+                                                readOnly: true
+                                                text: model.text
+                                                color: theme.textSecondary
+                                                font.pixelSize: 11
+                                                wrapMode: TextArea.Wrap
+                                                selectionColor: theme.primary
+                                                selectedTextColor: theme.text
+                                                background: Item {}
+                                                padding: 8
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: status === "error" ? "Error" : "Response"
+                                        color: theme.textMuted
+                                        font.pixelSize: 10
+                                        font.weight: Font.Medium
+                                    }
                                     Rectangle {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: Math.min(bodyTxt.implicitHeight + 16, 240)
@@ -1159,8 +1758,8 @@ Item {
                                                 id: bodyTxt
                                                 readOnly: true
                                                 text: status === "error"
-                                                    ? ("Error: " + (error || "(unknown)"))
-                                                    : body
+                                                    ? ("Error: " + (model.error || "(unknown)"))
+                                                    : model.body
                                                 color: status === "error" ? theme.error : theme.text
                                                 font.pixelSize: 12
                                                 wrapMode: TextArea.Wrap
@@ -1168,6 +1767,17 @@ Item {
                                                 selectedTextColor: theme.text
                                                 background: Item {}
                                                 padding: 8
+                                                // Pi answers are usually
+                                                // markdown — render
+                                                // headings, bold, italics,
+                                                // lists, fenced code blocks
+                                                // natively. Errors stay
+                                                // plain (the "Error: ..."
+                                                // prefix doesn't need
+                                                // formatting).
+                                                textFormat: status === "error"
+                                                    ? TextEdit.PlainText
+                                                    : TextEdit.MarkdownText
                                             }
                                         }
                                     }
@@ -1209,8 +1819,17 @@ Item {
                                         DarkButton {
                                             text: "Re-run"
                                             onClicked: {
-                                                delegateCap.text = capability;
-                                                delegateText.text = text;
+                                                // model.* prefix avoids
+                                                // the trap where `text`
+                                                // resolves to this
+                                                // Button's "Re-run" label
+                                                // instead of the row's
+                                                // task text. Same trap
+                                                // hits `capability` if a
+                                                // child sets it, so
+                                                // prefix both for safety.
+                                                delegateCap.setText(model.capability);
+                                                delegateText.text = model.text;
                                                 delegateText.forceActiveFocus();
                                             }
                                         }
@@ -1218,13 +1837,21 @@ Item {
                                             text: "Follow up"
                                             visible: status === "done"
                                             onClicked: {
-                                                delegateCap.text = capability;
-                                                delegateText.text =
-                                                    "Previous task:\n" + text +
-                                                    "\n\nPrevious answer:\n" + body +
-                                                    "\n\nFollow-up: ";
+                                                // Stamp the next Delegate
+                                                // click with a session id
+                                                // tied to this task. The
+                                                // receiver's wrapper sees
+                                                // LMAO_SESSION_ID and
+                                                // reuses pi/lemonade
+                                                // conversation state, so
+                                                // the operator only needs
+                                                // to type the new question
+                                                // — no rolled-up history.
+                                                root.pendingSessionId =
+                                                    model.session_id || model.task_id;
+                                                delegateCap.setText(model.capability);
+                                                delegateText.text = "";
                                                 delegateText.forceActiveFocus();
-                                                delegateText.cursorPosition = delegateText.length;
                                             }
                                         }
                                         Item { Layout.fillWidth: true }
@@ -1328,6 +1955,20 @@ Item {
                 }
 
                 Component.onCompleted: refreshTrust()
+
+                // Auto-refresh whenever the daemon transitions to
+                // ready. Without this, opening the Trust tab while
+                // the daemon is still warming up sticks the pane on
+                // "daemon not running" until the operator clicks
+                // Refresh manually. Fires once per ready-edge.
+                Connections {
+                    target: root
+                    function onDaemonStateChanged() {
+                        if (root.daemonState === "ready") {
+                            trustCol.refreshTrust();
+                        }
+                    }
+                }
 
                 RowLayout {
                     Layout.fillWidth: true

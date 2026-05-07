@@ -1,6 +1,6 @@
 //! Discovery, presence, and registry operations for [`LmaoNode`].
 
-use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement};
+use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement, SealedStatus};
 use logos_messaging_a2a_transport::Transport;
 use std::collections::HashMap;
 
@@ -148,6 +148,7 @@ impl<T: Transport> LmaoNode<T> {
 
     /// Broadcast a presence announcement with a custom TTL.
     pub async fn announce_presence_with_ttl(&self, ttl_secs: u64) -> Result<()> {
+        let sealed = self.build_sealed_status_envelopes();
         let mut announcement = PresenceAnnouncement {
             agent_id: self.pubkey().to_string(),
             name: self.card.name.clone(),
@@ -155,6 +156,7 @@ impl<T: Transport> LmaoNode<T> {
             waku_topic: topics::task_topic(self.pubkey()),
             ttl_secs,
             signature: None,
+            sealed_status: sealed,
         };
         announcement.sign(&self.signing_key)?;
         let envelope = A2AEnvelope::Presence(announcement);
@@ -167,6 +169,27 @@ impl<T: Transport> LmaoNode<T> {
         Metrics::inc(&self.metrics.messages_published);
         tracing::info!(name = %self.card.name, ttl_secs, "Presence announced");
         Ok(())
+    }
+
+    /// Seal the current load status for every trusted peer that has
+    /// shared an X25519 encryption pubkey. Untrusted observers see only
+    /// the count of envelopes — no payload, no peer identities.
+    fn build_sealed_status_envelopes(&self) -> Vec<SealedStatus> {
+        let status = self.current_load_status();
+        let (_, entries) = self.trust_snapshot();
+        entries
+            .iter()
+            .filter_map(|e| {
+                let pub_hex = e.encryption_pubkey.as_deref()?;
+                match SealedStatus::seal(pub_hex, &status) {
+                    Ok(env) => Some(env),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skipping sealed envelope for trust entry");
+                        None
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Poll the presence topic for new announcements and update the peer map.
@@ -193,7 +216,12 @@ impl<T: Transport> LmaoNode<T> {
                         );
                         continue;
                     }
-                    self.peer_map.update(&ann);
+                    let load = self.identity.as_ref().and_then(|me| {
+                        ann.sealed_status
+                            .iter()
+                            .find_map(|env| env.unseal_with(me).ok().flatten())
+                    });
+                    self.peer_map.update_with_load(&ann, load);
                     Metrics::inc(&self.metrics.peers_discovered);
                     tracing::info!(
                         name = %ann.name,
@@ -391,6 +419,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(unsigned);
         let payload = serde_json::to_vec(&envelope).unwrap();
@@ -416,6 +445,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         ann.sign(alice.signing_key()).unwrap();
 
@@ -446,6 +476,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         ann.sign(bob.signing_key()).unwrap();
 
@@ -1195,6 +1226,7 @@ mod announce_and_discover_tests {
             waku_topic: "/topic".into(),
             ttl_secs: 9999,
             signature: None,
+            sealed_status: vec![],
         });
         assert_eq!(node.peers().all_live().len(), 1);
     }

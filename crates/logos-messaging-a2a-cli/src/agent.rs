@@ -25,13 +25,30 @@ struct ExecOutput {
 /// as the audit-log payload. A non-zero exit is surfaced as an error so
 /// the caller can decide whether to respond with a graceful "[error]"
 /// message or skip the task entirely.
-async fn run_exec(cmd: &str, task_text: &str) -> Result<ExecOutput> {
-    let mut child = tokio::process::Command::new("sh")
+async fn run_exec(
+    cmd: &str,
+    task_text: &str,
+    session_id: Option<&str>,
+    sender: &str,
+) -> Result<ExecOutput> {
+    let mut command = tokio::process::Command::new("sh");
+    command
         .arg("-c")
         .arg(cmd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        // Pass conversation context to the exec via env so wrappers
+        // (pi-exec.sh, lemonade-summarizer.sh) can keep per-thread
+        // state — pi `--session $LMAO_SESSION_ID`, lemonade conversation
+        // history file — instead of cold-starting every follow-up.
+        .env("LMAO_SENDER_PUBKEY", sender);
+    if let Some(sid) = session_id {
+        if !sid.is_empty() {
+            command.env("LMAO_SESSION_ID", sid);
+        }
+    }
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn `sh -c {cmd:?}` — is the command on PATH?"))?;
 
@@ -127,6 +144,7 @@ pub async fn handle(
     daemon_socket: Option<PathBuf>,
     identity: &IdentityConfig,
     trust_file: Option<PathBuf>,
+    storage_data_dir: Option<PathBuf>,
     json: bool,
 ) -> Result<()> {
     match action {
@@ -142,10 +160,27 @@ pub async fn handle(
                 .with_context(|| format!("loading trust file {}", trust_path.display()))?;
             let trust_mode = trust_list.mode();
             let trust_count = trust_list.len();
-            let node = Arc::new(
-                build_node(&name, &format!("{} agent", name), caps, transport, identity)?
-                    .with_trust_list(trust_list),
-            );
+            // Persist history alongside the storage data dir so wiping
+            // libstorage state and wiping history are independent ops.
+            // No history when storage_data_dir is unset (ephemeral CLI),
+            // since we don't have a stable home for the JSONL file.
+            let history = storage_data_dir.as_ref().map(|d| {
+                let path = d.join("history.jsonl");
+                logos_messaging_a2a_node::history::History::open(path)
+            });
+
+            let max_concurrent: u32 = std::env::var("LMAO_AGENT_MAX_CONCURRENT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1)
+                .max(1);
+            let mut builder = build_node(&name, &format!("{} agent", name), caps, transport, identity)?
+                .with_trust_list(trust_list)
+                .with_max_concurrent(max_concurrent);
+            if let Some(h) = history {
+                builder = builder.with_history(h);
+            }
+            let node = Arc::new(builder);
 
             if json {
                 let mut info = serde_json::json!({
@@ -248,11 +283,60 @@ pub async fn handle(
             // Inbox loop. Also drains presence so the agent's PeerMap
             // sees other agents' announcements — required for any
             // capability-routed delegation through this agent's daemon.
+            //
+            // Long-running agents accumulate state without periodic
+            // eviction: stale presence entries, idle conversation
+            // sessions. We tick the eviction every `EVICT_EVERY_TICKS`
+            // poll iterations so the agent's RSS doesn't climb
+            // monotonically over hours of uptime.
+            const EVICT_EVERY_TICKS: u32 = 30; // ~ every 60 s with POLL_INTERVAL=2s
+            const SESSION_IDLE_MAX_SECS: u64 = 60 * 60; // 1 h
+            let mut tick: u32 = 0;
             loop {
+                tick = tick.wrapping_add(1);
+                if tick % EVICT_EVERY_TICKS == 0 {
+                    let evicted_peers = node.peers().evict_expired();
+                    let evicted_sessions = node.evict_idle_sessions(SESSION_IDLE_MAX_SECS);
+                    if evicted_peers + evicted_sessions > 0 {
+                        eprintln!(
+                            "[evict] peers={evicted_peers} sessions={evicted_sessions}"
+                        );
+                    }
+                }
                 let _ = node.poll_presence().await;
                 match node.poll_tasks().await {
                     Ok(tasks) => {
+                        // Track in-batch acceptance so we can short-circuit
+                        // once we hit `max_concurrent`. With sequential
+                        // exec this only matters when `poll_tasks` drains
+                        // multiple tasks at once — in that case all but
+                        // `max_concurrent` get an immediate "rejected"
+                        // response so the sender can retry elsewhere
+                        // instead of timing out.
+                        let mut accepted_this_batch: u32 = 0;
+                        let max_in_batch = node.max_concurrent();
                         for task in tasks {
+                            if accepted_this_batch >= max_in_batch {
+                                let reject_payload =
+                                    "[rejected: at capacity, retry later]".to_string();
+                                if json {
+                                    let event = serde_json::json!({
+                                        "event": "task_rejected",
+                                        "task_id": task.id,
+                                        "from": task.from,
+                                        "reason": "at_capacity",
+                                        "max_concurrent": max_in_batch,
+                                    });
+                                    println!("{}", serde_json::to_string(&event)?);
+                                } else {
+                                    eprintln!(
+                                        "  Rejected task {} from {} — at capacity",
+                                        task.id, task.from
+                                    );
+                                }
+                                let _ = node.respond(&task, &reject_payload).await;
+                                continue;
+                            }
                             if json {
                                 let mut event = serde_json::json!({
                                     "event": "task_received",
@@ -261,21 +345,39 @@ pub async fn handle(
                                 });
                                 if let Some(text) = task.text() {
                                     event["message"] = serde_json::json!(text);
-                                    let response = match run_exec(&exec, text).await {
+                                    if let Some(ref sid) = task.session_id {
+                                        event["session_id"] = serde_json::json!(sid);
+                                    }
+                                    accepted_this_batch += 1;
+                                    node.load_inc();
+                                    let exec_result = run_exec(
+                                        &exec,
+                                        text,
+                                        task.session_id.as_deref(),
+                                        &task.from,
+                                    )
+                                    .await;
+                                    let (response, failed) = match exec_result {
                                         Ok(out) => {
                                             event["log_bytes"] = serde_json::json!(out.log.len());
                                             let cid = upload_log(&storage, &out.log).await;
                                             if let Some(ref c) = cid {
                                                 event["log_cid"] = serde_json::json!(c);
                                             }
-                                            format_response(&out.response, cid.as_deref())
+                                            (format_response(&out.response, cid.as_deref()), false)
                                         }
                                         Err(e) => {
                                             event["exec_error"] = serde_json::json!(e.to_string());
-                                            format!("[error] {e}")
+                                            (format!("[error] {e}"), true)
                                         }
                                     };
-                                    match node.respond(&task, &response).await {
+                                    node.load_dec();
+                                    let respond_outcome = if failed {
+                                        node.respond_failed(&task, &response).await
+                                    } else {
+                                        node.respond(&task, &response).await
+                                    };
+                                    match respond_outcome {
                                         Ok(()) => {
                                             event["response"] = serde_json::json!(response);
                                         }
@@ -289,7 +391,19 @@ pub async fn handle(
                                 println!("Received task {} from {}", task.id, task.from);
                                 if let Some(text) = task.text() {
                                     println!("  Message: {}", text);
-                                    let response = match run_exec(&exec, text).await {
+                                    if let Some(ref sid) = task.session_id {
+                                        println!("  Session: {sid}");
+                                    }
+                                    accepted_this_batch += 1;
+                                    node.load_inc();
+                                    let (response, failed) = match run_exec(
+                                        &exec,
+                                        text,
+                                        task.session_id.as_deref(),
+                                        &task.from,
+                                    )
+                                    .await
+                                    {
                                         Ok(out) => {
                                             if !out.log.is_empty() {
                                                 println!("  Exec log: {} bytes", out.log.len());
@@ -298,14 +412,20 @@ pub async fn handle(
                                             if let Some(ref c) = cid {
                                                 println!("  Uploaded log → codex://{c}");
                                             }
-                                            format_response(&out.response, cid.as_deref())
+                                            (format_response(&out.response, cid.as_deref()), false)
                                         }
                                         Err(e) => {
                                             eprintln!("  Exec failed: {e}");
-                                            format!("[error] {e}")
+                                            (format!("[error] {e}"), true)
                                         }
                                     };
-                                    if let Err(e) = node.respond(&task, &response).await {
+                                    node.load_dec();
+                                    let respond_outcome = if failed {
+                                        node.respond_failed(&task, &response).await
+                                    } else {
+                                        node.respond(&task, &response).await
+                                    };
+                                    if let Err(e) = respond_outcome {
                                         eprintln!("  Failed to respond: {}", e);
                                     } else {
                                         let preview = if response.len() > 200 {
@@ -313,7 +433,8 @@ pub async fn handle(
                                         } else {
                                             response.clone()
                                         };
-                                        println!("  Responded: {}", preview);
+                                        println!("  Responded ({}): {}",
+                                            if failed { "failed" } else { "ok" }, preview);
                                     }
                                 }
                             }
