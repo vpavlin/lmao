@@ -226,7 +226,24 @@ impl DaemonServer {
                     timeout_secs,
                     session_id,
                 };
-                let results = if broadcast {
+                // `--to <pubkey>` short-circuits strategy selection: send
+                // the subtask directly to the named peer, regardless of
+                // capability list / load / round-robin counter. Trust
+                // list still applies — direct delegation to an untrusted
+                // peer surfaces a diagnostic error rather than silently
+                // failing strategy fall-through (the previous behaviour
+                // dropped `to` on the floor and ran FirstAvailable).
+                let results = if let Some(ref pk) = to {
+                    if broadcast {
+                        return Ok(Response::Error {
+                            message:
+                                "--broadcast cannot be combined with --to (direct delegation \
+                                 targets a single peer)"
+                                    .into(),
+                        });
+                    }
+                    vec![self.node.delegate_direct(&request, pk).await?]
+                } else if broadcast {
                     self.node.delegate_broadcast(&request).await?
                 } else {
                     vec![self.node.delegate_task(&request).await?]
@@ -439,9 +456,10 @@ fn build_strategy(
     capability: Option<&str>,
     strategy_name: Option<&str>,
 ) -> DelegationStrategy {
-    if let Some(_pk) = to {
-        // Direct delegation goes through `to` on the request — the
-        // strategy field is unused. Use FirstAvailable as a no-op.
+    if to.is_some() {
+        // Direct delegation is dispatched separately (see `delegate_direct`
+        // call site). The strategy field on the request is unused in that
+        // path; we still return *some* value here to satisfy the type.
         return DelegationStrategy::FirstAvailable;
     }
     match strategy_name {
