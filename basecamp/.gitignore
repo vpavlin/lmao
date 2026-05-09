@@ -1,5 +1,6 @@
 .DS_Store
-result
+# Catches `result`, `result-portable`, `result-fat`, `result-mcp`, etc. —
+# every Nix output flavour `nix build -o <name>` may produce.
+result*
 build/
 .direnv
-result
