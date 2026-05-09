@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <dlfcn.h>
 #include <mutex>
 #include <random>
 #include <thread>
@@ -64,16 +65,42 @@ QString errorJson(const QString& message) {
     return QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
-/// Resolve the `lmao` binary path. Honours `LMAO_BIN`, then falls back
-/// to the conventional release path inside this repo, then PATH.
+/// Locate THIS plugin's installed directory at runtime so we can look
+/// for sibling files (a bundled `lmao` binary, `liblogosdelivery.so`,
+/// etc.) without hardcoding the host's paths. dladdr resolves the
+/// `.so` that a known symbol came from; we use this function itself
+/// as the symbol so the lookup is self-contained.
+QString pluginDir() {
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void*>(&pluginDir), &info)
+        && info.dli_fname && info.dli_fname[0]) {
+        return QFileInfo(QString::fromUtf8(info.dli_fname)).absolutePath();
+    }
+    return QString();
+}
+
+/// Resolve the `lmao` binary path. Search order:
+///   1. A bundled `lmao` / `logos-messaging-a2a` next to this plugin's
+///      .so (set up by `scripts/build-fat-lgx.sh`). This is the path
+///      that lets the LGX work in the official Basecamp build with no
+///      operator-side env config.
+///   2. `$LMAO_BIN` env var — explicit operator override.
+///   3. Common system locations and `$PATH`.
 QString resolveLmaoBinary() {
+    const QString dir = pluginDir();
+    if (!dir.isEmpty()) {
+        for (const auto& name :
+             {QStringLiteral("lmao"), QStringLiteral("logos-messaging-a2a")}) {
+            const QString p = dir + "/" + name;
+            if (QFileInfo::exists(p)) return p;
+        }
+    }
     if (auto env = qEnvironmentVariable("LMAO_BIN"); !env.isEmpty()
         && QFileInfo::exists(env)) {
         return env;
     }
     const QStringList candidates = {
         QDir::homePath() + "/.cargo/bin/lmao",
-        QDir::homePath() + "/devel/github.com/vpavlin/lmao/target/release/logos-messaging-a2a",
         "/usr/local/bin/lmao",
         "/usr/bin/lmao",
     };
@@ -212,18 +239,27 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     // sticks.
     {
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        const QString libDir = qEnvironmentVariable("LIBLOGOSDELIVERY_LIB_DIR");
-        if (!libDir.isEmpty()) {
-            const QString existing = env.value("LD_LIBRARY_PATH");
-            const QString updated = existing.isEmpty()
-                ? libDir
-                : libDir + ":" + existing;
-            env.insert("LD_LIBRARY_PATH", updated);
-        } else {
+        // Build LD_LIBRARY_PATH from (in priority order): the operator's
+        // explicit LIBLOGOSDELIVERY_LIB_DIR, this plugin's own directory
+        // (in case build-fat-lgx.sh bundled liblogosdelivery.so next to
+        // the .so), and whatever was already in LD_LIBRARY_PATH. The
+        // plugin-dir fallback is what makes the LGX self-contained on
+        // an official-Basecamp install.
+        QStringList ldDirs;
+        const QString opLibDir = qEnvironmentVariable("LIBLOGOSDELIVERY_LIB_DIR");
+        if (!opLibDir.isEmpty()) ldDirs << opLibDir;
+        const QString plugDir = pluginDir();
+        if (!plugDir.isEmpty()) ldDirs << plugDir;
+        const QString existing = env.value("LD_LIBRARY_PATH");
+        if (!existing.isEmpty()) ldDirs << existing;
+        if (!ldDirs.isEmpty()) {
+            env.insert("LD_LIBRARY_PATH", ldDirs.join(":"));
+        }
+        if (opLibDir.isEmpty() && plugDir.isEmpty()) {
             qWarning().noquote()
-                << "AgentImpl: LIBLOGOSDELIVERY_LIB_DIR not set in environment;"
-                << "the spawned `lmao agent run` will likely fail to load"
-                << "liblogosdelivery.so. Export it before launching Basecamp.";
+                << "AgentImpl: neither LIBLOGOSDELIVERY_LIB_DIR nor a"
+                << "bundled libdir were resolvable; the spawned `lmao"
+                << "agent run` may fail to load liblogosdelivery.so.";
         }
         m_state->process.setProcessEnvironment(env);
     }

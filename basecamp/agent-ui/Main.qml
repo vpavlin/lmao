@@ -260,8 +260,16 @@ Item {
     /// module wraps everything as JSON; on errors it returns
     /// `{"error": "..."}`. Returns the parsed object, or null.
     function parseModuleJson(raw) {
+        // Some Basecamp builds (notably the official AppImage) double-
+        // encode std::string returns: JSON.parse yields a JSON string,
+        // not the parsed object. Re-parse in that case so callers see
+        // the same shape across builds.
         try {
-            return JSON.parse(raw);
+            const first = JSON.parse(raw);
+            if (typeof first === "string") {
+                try { return JSON.parse(first); } catch (_) { return first; }
+            }
+            return first;
         } catch (e) {
             console.warn("agent_ui: invalid JSON from module:", raw);
             return null;
