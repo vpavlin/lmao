@@ -110,10 +110,10 @@ public:
     /// Add (or replace) a trusted peer. `capabilities` is a comma-
     /// separated list — empty string means "trusted for any capability".
     /// `notes` may be empty. Returns the JSON daemon response.
-    std::string trust_add(const std::string& pubkey,
-                          const std::string& nickname,
-                          const std::string& capabilities,
-                          const std::string& notes);
+    /// (Single-line signature — the universal-module C++ parser
+    /// silently skips multi-line method declarations, which is how
+    /// this method shipped without a dispatch wrapper for two builds.)
+    std::string trust_add(const std::string& pubkey, const std::string& nickname, const std::string& capabilities, const std::string& notes);
 
     /// Remove a trusted peer by pubkey *or* nickname.
     std::string trust_remove(const std::string& target);

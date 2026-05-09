@@ -522,7 +522,21 @@ std::string AgentImpl::start_delegate(const std::string& capability,
         QJsonDocument doc = QJsonDocument::fromJson(resp.toUtf8());
         if (doc.isObject()) {
             QJsonObject obj = doc.object();
-            if (obj.contains("error")) {
+            // Daemon serializes Response::Error as
+            //   {"kind": "error", "message": "<text>"}
+            // (see crates/.../daemon/protocol.rs — `#[serde(tag = "kind",
+            // rename_all = "snake_case")]`). The earlier code looked for
+            // a top-level `error` key that the daemon never emits, so
+            // every daemon-side failure (no live peers, trust filtered,
+            // delegation timed out before a single tick of the strategy
+            // selector) collapsed to a misleading "no matching peer
+            // responded". Match the actual shape, AND keep the legacy
+            // `error` key as a fallback for any older daemon someone
+            // might still be talking to.
+            if (obj.value("kind").toString() == "error" && obj.contains("message")) {
+                event["success"] = false;
+                event["error"]   = obj["message"];
+            } else if (obj.contains("error")) {
                 event["success"] = false;
                 event["error"]   = obj["error"];
             } else {
@@ -591,7 +605,13 @@ std::string AgentImpl::start_fetch_cid(const std::string& cid) {
         QJsonDocument doc = QJsonDocument::fromJson(resp.toUtf8());
         if (doc.isObject()) {
             QJsonObject obj = doc.object();
-            if (obj.contains("error")) {
+            // Same daemon-error shape as start_delegate above:
+            // `{kind: "error", message}` is the wire format, but legacy
+            // code checked the wrong key. Surface the real message.
+            if (obj.value("kind").toString() == "error" && obj.contains("message")) {
+                event["success"] = false;
+                event["error"]   = obj["message"];
+            } else if (obj.contains("error")) {
                 event["success"] = false;
                 event["error"]   = obj["error"];
             } else {
