@@ -12,3 +12,8 @@ dist/
 # `git add -A` doesn't accidentally commit secrets.
 /demo-config/pi/agent/models.json
 /demo-config/pi/agent/auth.json
+
+# Personal presentation material — kept out of the repo by default.
+# Drop this entry if you want to publish slides alongside the code.
+/slides/
+/SLIDES_CONTEXT.md
