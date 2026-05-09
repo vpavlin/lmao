@@ -3,7 +3,7 @@
 
 use logos_messaging_a2a_core::{
     topics, A2AEnvelope, DelegationRequest, DelegationResult, DelegationStrategy, LoadBucket, Task,
-    TaskState,
+    TaskState, TrustMode,
 };
 use logos_messaging_a2a_transport::Transport;
 use std::sync::atomic::Ordering;
@@ -30,6 +30,31 @@ fn load_rank(info: &PeerInfo) -> u8 {
     }
 }
 
+/// Build a delegation error that distinguishes "no candidates exist" from
+/// "candidates exist but trust filtered them all out". The second case is
+/// confusing in practice — operators see "no live peers" while
+/// `presence peers` shows live peers — so name it explicitly.
+fn no_trusted_peers_err<T: Transport>(
+    node: &LmaoNode<T>,
+    total_candidates: usize,
+    capability: Option<&str>,
+) -> NodeError {
+    let mode = node.trust_mode();
+    let what = match capability {
+        Some(cap) => format!("with capability '{cap}'"),
+        None => String::from("available"),
+    };
+    if total_candidates > 0 && !matches!(mode, TrustMode::Off) {
+        NodeError::Other(format!(
+            "no trusted peers {what} for delegation: {total_candidates} live peer(s) all filtered \
+             by trust list (mode={mode:?}). Add them with `lmao trust add <pubkey>` or pass \
+             `--trust-file <path>` to use a different list."
+        ))
+    } else {
+        NodeError::Other(format!("no live peers {what} for delegation"))
+    }
+}
+
 impl<T: Transport> LmaoNode<T> {
     /// Delegate a subtask to a single peer based on the delegation strategy.
     ///
@@ -53,26 +78,22 @@ impl<T: Transport> LmaoNode<T> {
             DelegationStrategy::FirstAvailable => {
                 let mut peers = self.peers().all_live();
                 peers.sort_by_key(|(_, info)| load_rank(info));
+                let total_live = peers.len();
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
                     .find(|id| self.is_trusted(id))
-                    .ok_or_else(|| {
-                        NodeError::Other("no live peers available for delegation".into())
-                    })?
+                    .ok_or_else(|| no_trusted_peers_err(self, total_live, None))?
             }
             DelegationStrategy::CapabilityMatch { capability } => {
                 let mut peers = self.find_peers_by_capability(capability);
                 peers.sort_by_key(|(_, info)| load_rank(info));
+                let total_live = peers.len();
                 peers
                     .into_iter()
                     .map(|(id, _)| id)
                     .find(|id| self.is_trusted_for(id, capability))
-                    .ok_or_else(|| {
-                        NodeError::Other(format!(
-                            "no live peers with capability '{capability}' for delegation"
-                        ))
-                    })?
+                    .ok_or_else(|| no_trusted_peers_err(self, total_live, Some(capability)))?
             }
             DelegationStrategy::BroadcastCollect => {
                 // For single delegation, broadcast acts like first-available
@@ -113,6 +134,36 @@ impl<T: Transport> LmaoNode<T> {
 
         Metrics::inc(&self.metrics.delegations_sent);
         self.delegate_to_peer(request, &peer_id, timeout_secs).await
+    }
+
+    /// Delegate a subtask directly to a specific peer by pubkey, bypassing
+    /// strategy-based selection. Used when the caller already knows which
+    /// peer should handle the task (e.g. `lmao task delegate --to <pk>`
+    /// through the daemon, or any UI that has a peer handle).
+    ///
+    /// Honors the trust list — direct delegation still respects the
+    /// configured `TrustMode`. In `Off` mode this is a no-op; in `Log` /
+    /// `Enforce` an untrusted target produces a diagnostic error rather
+    /// than silently falling back to strategy-based routing.
+    pub async fn delegate_direct(
+        &self,
+        request: &DelegationRequest,
+        peer_pubkey: &str,
+    ) -> Result<DelegationResult> {
+        let timeout_secs = if request.timeout_secs == 0 {
+            DEFAULT_DELEGATION_TIMEOUT_SECS
+        } else {
+            request.timeout_secs
+        };
+        if !self.is_trusted(peer_pubkey) {
+            return Err(NodeError::Other(format!(
+                "direct delegation to {peer_pubkey} blocked: peer not on trust list (mode={:?}). \
+                 Add it with `lmao trust add` or pass an alternate `--trust-file`.",
+                self.trust_mode()
+            )));
+        }
+        Metrics::inc(&self.metrics.delegations_sent);
+        self.delegate_to_peer(request, peer_pubkey, timeout_secs).await
     }
 
     /// Delegate a subtask to all matching peers and collect responses.

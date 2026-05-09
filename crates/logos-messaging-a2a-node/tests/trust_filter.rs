@@ -314,7 +314,7 @@ async fn delegate_errors_when_no_trusted_peer_advertises_capability() {
     let err = alice.delegate_task(&req).await.unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("no live peers with capability"),
-        "expected capability-not-found error, got: {msg}"
+        msg.contains("with capability 'code'") && msg.contains("trust list"),
+        "expected trust-filtered capability error, got: {msg}"
     );
 }

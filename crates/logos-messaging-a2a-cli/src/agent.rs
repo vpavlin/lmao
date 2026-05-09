@@ -154,6 +154,7 @@ pub async fn handle(
             exec,
         } => {
             let caps = parse_capabilities(&capabilities);
+            let trust_file_explicit = trust_file.is_some();
             let trust_path =
                 trust_file.unwrap_or_else(logos_messaging_a2a_core::TrustList::default_path);
             let trust_list = logos_messaging_a2a_core::TrustList::load_from(&trust_path)
@@ -217,6 +218,27 @@ pub async fn handle(
                     "Trust: {trust_mode:?} ({trust_count} entries from {})",
                     trust_path.display()
                 );
+                // Loud warning when an *implicit* default trust file is
+                // active in Enforce mode — incoming presence + delegation
+                // from peers not on the list will be silently filtered,
+                // and operators have been bitten by stale lists from a
+                // previous demo carrying over into a fresh run.
+                if !trust_file_explicit
+                    && matches!(
+                        trust_mode,
+                        logos_messaging_a2a_core::TrustMode::Enforce
+                    )
+                    && trust_count > 0
+                {
+                    eprintln!(
+                        "warning: trust list is in `enforce` mode with {trust_count} entries \
+                         loaded from the default path ({}). Peers not on the list will be \
+                         filtered out of presence and delegation. Pass `--trust-file <path>` \
+                         to use a different list, or run `lmao trust mode off` to disable \
+                         filtering for this identity.",
+                        trust_path.display()
+                    );
+                }
                 if identity.encrypt {
                     if let Some(ref bundle) = node.card.intro_bundle {
                         println!("Encryption: ENABLED (X25519+ChaCha20-Poly1305)");
