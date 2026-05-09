@@ -69,6 +69,11 @@ services:
       # daemon from outside the container (e.g. with `docker exec`,
       # or by SSH-ing in and running `lmao daemon status`).
       - ./remote-data-sock:/run/lmao
+      # Pi-coding-agent config (model provider URLs + API keys + the
+      # default model selection). Read-only so the container can never
+      # write back into the host config. See "Configuring the model"
+      # below for what to put inside.
+      - ./pi-config:/home/lmao/.pi:ro
     ports:
       # Optional — only useful if you'll dial this agent directly from
       # another machine on the same LAN. The mesh works fine without it.
@@ -76,12 +81,18 @@ services:
       - "9010:9010/udp"
     environment:
       LMAO_PRESENCE_REANNOUNCE_SECS: "15"
-      # Point the executor at whatever local model endpoint you have.
-      # Examples:
-      #   - Ollama on the host:    http://host.docker.internal:11434
-      #   - lemonade-server:       http://host.docker.internal:8000
-      #   - vLLM / llama.cpp:      http://host.docker.internal:<port>
-      OPENAI_BASE_URL: http://host.docker.internal:11434/v1
+      # Pi tools enabled (read/bash/curl/edit/write). Safe inside the
+      # container because the filesystem is the container's, not the
+      # host's; gives the model real grounding to do useful work.
+      PI_TOOLS: "1"
+      # Pi tool-call turns can run long under load — give it room
+      # rather than killing it mid-fetch.
+      PI_TIMEOUT: "900"
+      # Per-thread session sidecars land here. The default would write
+      # under ~/.pi/sessions, but that path is read-only; redirect to
+      # the writable /data volume so session-resume + KV-cache reuse
+      # works across runs.
+      PI_SESSION_DIR: "/data/pi-sessions"
     command: >
       --transport logos-delivery
       --storage libstorage
@@ -92,14 +103,133 @@ services:
       --daemon-socket /run/lmao/lmao.sock
       agent run
         --name remote-agent
-        --capabilities text,summarize
-        --exec "sed s/^/[remote]\\ /"
+        --capabilities analyze,review,explain,text
+        --exec /usr/local/bin/pi-exec
 ```
 
-Replace `--exec "sed …"` with whatever executor binary you actually
-want — `goose`, `pi`, `aider`, a shell script that pipes to your
-preferred model. The container ships `goose` and `pi` out of the box;
-both pick up `OPENAI_BASE_URL` for endpoint config.
+The default executor is `pi` ([pi-coding-agent](https://www.npmjs.com/package/@mariozechner/pi-coding-agent))
+via the `/usr/local/bin/pi-exec` wrapper baked into the image. The
+wrapper streams the task text into pi, captures the response on stdout,
+and uses stderr as the audit-log payload that gets uploaded to
+libstorage. See the next section for how to point pi at a specific
+model. If you'd rather use `goose`, write a tiny shell wrapper, or call
+your own script, swap the `--exec` line; the rest of the YAML stays the
+same.
+
+## Configuring the model
+
+`pi` reads its configuration from `~/.pi/agent/` — which the compose
+file mounts from `./pi-config/` on the host. Two files matter:
+
+- **`agent/settings.json`** — picks the active provider + model and
+  some per-call retry behaviour. Tiny.
+- **`agent/models.json`** — defines the providers themselves: base URL,
+  API key, and the list of model IDs each provider serves. *Contains
+  secrets — never commit this file.* The repo's root `.gitignore`
+  excludes it from `demo-config/pi/agent/models.json` for that reason.
+
+### Quickest path: reuse a host config you already have
+
+If you've already used pi on the host (`pi configure` interactive setup
+or a manually-edited `~/.pi/agent/`), just point the volume mount at
+that:
+
+```yaml
+volumes:
+  - ${HOME}/.pi:/home/lmao/.pi:ro
+```
+
+Done — the container picks up your `defaultProvider` + `defaultModel`
+and your provider keys. Read-only mount means you can edit the host
+config without the container ever writing back.
+
+### From scratch
+
+Create `./pi-config/agent/` next to your compose file with two files.
+
+`./pi-config/agent/settings.json`:
+
+```json
+{
+  "defaultProvider": "venice",
+  "defaultModel": "deepseek-v4-flash",
+  "hideThinkingBlock": true,
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 5000,
+    "provider": {
+      "timeoutMs": 1200000,
+      "maxRetries": 0,
+      "maxRetryDelayMs": 60000
+    }
+  }
+}
+```
+
+`./pi-config/agent/models.json` (this is what holds your API keys, so
+keep it out of git):
+
+```json
+{
+  "venice": {
+    "baseUrl": "https://api.venice.ai/api/v1",
+    "apiKey": "VENICE_KEY_HERE"
+  },
+  "openrouter": {
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiKey": "OPENROUTER_KEY_HERE"
+  },
+  "ollama-local": {
+    "baseUrl": "http://host.docker.internal:11434/v1",
+    "apiKey": "ollama"
+  },
+  "lemonade-local": {
+    "baseUrl": "http://host.docker.internal:8000/v1",
+    "apiKey": "lemonade"
+  }
+}
+```
+
+Switch the active model by editing `defaultProvider` + `defaultModel`
+in `settings.json` and restarting the container — `docker compose
+restart agent`. No image rebuild, no compose-file edit.
+
+### Pointing at a host-side endpoint
+
+For `ollama-local` / `lemonade-local` / a `vllm` / `llama.cpp` server
+running on the same machine as the container, the `host.docker.internal`
+hostname resolves to the host's gateway IP — that's why the compose
+file already has `extra_hosts: host.docker.internal:host-gateway`. Use
+exactly that hostname in `models.json`'s `baseUrl`.
+
+For a remote endpoint (Venice, OpenRouter, OpenAI, Anthropic, a
+self-hosted box on a different machine), use the public URL directly —
+no host-gateway plumbing needed.
+
+### Verifying the model is actually being called
+
+After `docker compose up -d`, send the agent a test task and check
+that pi got involved:
+
+```bash
+docker exec lmao-agent /usr/local/bin/lmao \
+  --daemon-socket /run/lmao/lmao.sock \
+  task send --to <your-laptop-pubkey> --text "ping"
+```
+
+(Or delegate to it from your laptop and look at the response.) Then on
+the remote host:
+
+```bash
+docker exec lmao-agent ls /data/pi-sessions/
+```
+
+Should show one or more session JSONL files — pi creates them on every
+turn. The audit-log CID returned alongside the task response is also a
+direct read of pi's stderr trace; fetching it (`lmao storage fetch
+<cid>`) shows you which provider + model were used and the full
+tool-call history.
 
 ## 3. Start
 
@@ -176,7 +306,7 @@ Once you see its pubkey, you can:
 | `Address already in use` on startup | Another `lmao` is using the same TCP/UDP/storage ports on the same host | Change `--tcp-port` / `--udp-port` / `--storage-port` (and matching `ports:` mapping) to free numbers. |
 | `liblogosdelivery.so: cannot open shared object file` | Image was built without the lib (only possible when building from source — the published image always includes it) | Rebuild without cache: `docker compose build --no-cache agent`, or pull the published image. |
 | `unauthorized` / `manifest unknown` on `docker pull` | GHCR package is private and you're not authenticated | `echo "$GH_PAT" \| docker login ghcr.io -u <user> --password-stdin` with a `read:packages` token, or set the package to public. |
-| Executor returns empty / errors out | Inference endpoint unreachable from container, or model not loaded | `docker exec lmao-agent curl -fsS $OPENAI_BASE_URL/models` — if that fails, the container can't reach the model. |
+| Executor returns empty / errors out | Inference endpoint unreachable from container, model not loaded, or wrong provider/model in `settings.json` | `docker exec lmao-agent curl -fsS <baseUrl-from-models.json>/models` — if that fails, the container can't reach the endpoint. Confirm `defaultProvider` matches a key in `models.json` and `defaultModel` is one the provider actually serves. |
 | High CPU on idle agent | Stale entry-node peer-IDs in `liblogosdelivery`'s preset (see [issue 3858](https://github.com/logos-messaging/logos-delivery/issues/3858)) | Live with it for now, or pass `--entry-node` overrides if/when the upstream fix lands. |
 
 ## Build from source
