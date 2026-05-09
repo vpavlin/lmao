@@ -15,7 +15,7 @@ On the remote host:
 
 - Docker 24+ (or Docker Compose v2 standalone)
 - Outbound TCP/30303 to the Logos Dev fleet (`delivery-*.logos.dev.status.im`)
-- ~3 GB free disk for the build cache + libstorage data
+- ~1 GB free disk for the image + libstorage data
 - A way to feed the agent's executor — usually an OpenAI-compatible
   inference endpoint reachable from the container. If the model server
   runs on the host, plumb it via `extra_hosts: host.docker.internal:host-gateway`
@@ -28,28 +28,33 @@ You do **not** need:
 - An entry-node from your laptop. Your laptop and the remote agent
   meet on the public mesh; they don't dial each other directly.
 
-## 1. Get the source on the remote host
+## 1. Pull the image
+
+The pre-built image is published to GitHub Container Registry, so the
+remote host doesn't need a Rust + Nim toolchain or the source tree:
 
 ```bash
-git clone https://github.com/vpavlin/lmao.git
-cd lmao
+docker pull ghcr.io/vpavlin/lmao:dev
 ```
 
-Single tree per host; everything below runs from this directory.
+(If the image is private — the default for personal GHCR namespaces —
+authenticate first: `echo "$GH_PAT" | docker login ghcr.io -u <user>
+--password-stdin`, where `$GH_PAT` is a token with `read:packages`. Or
+flip the package to public on github.com so anonymous pulls work.)
+
+Prefer building from source — for development, custom feature flags, a
+fork, or air-gapped operation? Skip to the [Build from source](#build-from-source)
+section at the bottom; the rest of the recipe stays the same.
 
 ## 2. Drop a single-agent compose file
 
-The repo's `docker-compose.yml` builds a fleet (alice + bob + pi-analyst).
-For a remote box you usually want one service. Copy this to
-`docker-compose.remote.yml`:
+This is one self-contained YAML — no source tree needed. Save it as
+`docker-compose.yml` (or any name) in a directory on the remote host.
 
 ```yaml
 services:
   agent:
-    build:
-      context: .
-      network: host
-    image: lmao:dev
+    image: ghcr.io/vpavlin/lmao:dev
     container_name: lmao-agent
     user: "1000:1000"
     restart: unless-stopped
@@ -96,14 +101,14 @@ want — `goose`, `pi`, `aider`, a shell script that pipes to your
 preferred model. The container ships `goose` and `pi` out of the box;
 both pick up `OPENAI_BASE_URL` for endpoint config.
 
-## 3. Build and start
+## 3. Start
 
 ```bash
-docker compose -f docker-compose.remote.yml up -d --build
+docker compose up -d
 ```
 
-First build is ~10 min (Nim compile of `liblogosdelivery` is the long
-pole). Subsequent rebuilds are seconds.
+First start pulls the image (~300-500 MB compressed); subsequent starts
+are instant. No build step on the remote host.
 
 ## 4. Confirm it's on the mesh
 
@@ -159,8 +164,9 @@ Once you see its pubkey, you can:
 - **Storage size.** libstorage's data dir grows with serviced tasks +
   whatever the network gossips at this node. Plan for it; rotate or
   cap as you would any local content store.
-- **Updating.** `git pull && docker compose -f docker-compose.remote.yml
-  up -d --build`. Persistent volumes survive the rebuild.
+- **Updating.** `docker compose pull && docker compose up -d`. The
+  persistent volume survives the image swap, so identity + libstorage
+  state carry over.
 
 ## Troubleshooting
 
@@ -168,6 +174,37 @@ Once you see its pubkey, you can:
 |---|---|---|
 | Agent never appears in your local `lmao discover` | Outbound TCP/30303 blocked, or fleet keys rotated | `docker logs` and look for successful dials. If none, check egress firewall; if many `Noise handshake mismatch`, see [issues.md](issues.md). |
 | `Address already in use` on startup | Another `lmao` is using the same TCP/UDP/storage ports on the same host | Change `--tcp-port` / `--udp-port` / `--storage-port` (and matching `ports:` mapping) to free numbers. |
-| `liblogosdelivery.so: cannot open shared object file` | Image built without the lib (rare; build failure that didn't fail the image) | Rebuild without cache: `docker compose build --no-cache agent`. |
+| `liblogosdelivery.so: cannot open shared object file` | Image was built without the lib (only possible when building from source — the published image always includes it) | Rebuild without cache: `docker compose build --no-cache agent`, or pull the published image. |
+| `unauthorized` / `manifest unknown` on `docker pull` | GHCR package is private and you're not authenticated | `echo "$GH_PAT" \| docker login ghcr.io -u <user> --password-stdin` with a `read:packages` token, or set the package to public. |
 | Executor returns empty / errors out | Inference endpoint unreachable from container, or model not loaded | `docker exec lmao-agent curl -fsS $OPENAI_BASE_URL/models` — if that fails, the container can't reach the model. |
 | High CPU on idle agent | Stale entry-node peer-IDs in `liblogosdelivery`'s preset (see [issue 3858](https://github.com/logos-messaging/logos-delivery/issues/3858)) | Live with it for now, or pass `--entry-node` overrides if/when the upstream fix lands. |
+
+## Build from source
+
+If you can't (or don't want to) pull the published image — forking, custom
+features, air-gapped network, distrust of an opaque binary blob —
+clone the source on the remote host and build locally instead:
+
+```bash
+git clone https://github.com/vpavlin/lmao.git
+cd lmao
+docker compose -f docker-compose.yml build agent
+```
+
+Then in your `docker-compose.yml`, swap the `image:` line for a `build:`
+block:
+
+```yaml
+services:
+  agent:
+    build:
+      context: .
+      network: host
+    image: lmao:dev   # local tag; not pushed anywhere
+    # ... rest of the service definition unchanged
+```
+
+First build is ~10 min (the Nim compile of `liblogosdelivery` is the
+long pole; subsequent rebuilds are seconds). The repo's top-level
+`docker-compose.yml` is also a working multi-agent local fleet
+(alice + bob + pi-analyst) you can crib from.
