@@ -1,0 +1,26 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "description": "LMAO agent module — proxies a `lmao agent run` daemon's IPC surface (info / peers / delegate / send / fetch / stop) to other Logos modules and UIs",
+  "author": "vpavlin",
+  "type": "core",
+  "interface": "universal",
+  "category": "agents",
+  "main": "agent_plugin",
+  "dependencies": [],
+  "include": [],
+  "capabilities": [],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": ["Qt6Network"],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": ["Qt6::Network"]
+    }
+  }
+}

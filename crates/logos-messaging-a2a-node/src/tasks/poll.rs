@@ -1,11 +1,11 @@
-use logos_messaging_a2a_core::{A2AEnvelope, Task};
+use logos_messaging_a2a_core::{A2AEnvelope, Task, TrustMode};
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
 use crate::session::Session;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{LmaoNode, NodeError, Result};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Poll for incoming tasks addressed to this agent.
     ///
     /// Lazily subscribes to the task topic on first call. Processes incoming
@@ -50,7 +50,9 @@ impl<T: Transport> WakuA2ANode<T> {
                     let _ = self.channel.send_ack("", &content.message_id).await;
 
                     if let Some(task) = self.extract_task(&content.content).await? {
-                        tasks.push(task);
+                        if self.accept_or_drop(&task) {
+                            tasks.push(task);
+                        }
                     }
                 }
             } else {
@@ -64,7 +66,9 @@ impl<T: Transport> WakuA2ANode<T> {
                     self.channel.bloom.set(&dedup_id);
 
                     if let Some(task) = self.extract_task_from_envelope(envelope).await? {
-                        tasks.push(task);
+                        if self.accept_or_drop(&task) {
+                            tasks.push(task);
+                        }
                     }
                 }
             }
@@ -80,7 +84,9 @@ impl<T: Transport> WakuA2ANode<T> {
         let tasks = verified_tasks;
         Metrics::inc_by(&self.metrics.tasks_received, tasks.len() as u64);
 
-        // Track incoming tasks in their sessions
+        // Track incoming tasks in their sessions. `push_task` caps the
+        // per-session `task_ids` so a long conversation can't grow the
+        // session indefinitely.
         for task in &tasks {
             if let Some(ref sid) = task.session_id {
                 let mut sessions = self.sessions.lock().unwrap();
@@ -89,9 +95,7 @@ impl<T: Transport> WakuA2ANode<T> {
                     Metrics::inc(&metrics.sessions_created);
                     Session::new(&task.from)
                 });
-                if !session.task_ids.contains(&task.id) {
-                    session.task_ids.push(task.id.clone());
-                }
+                session.push_task(task.id.clone());
             }
         }
         Ok(tasks)
@@ -131,6 +135,41 @@ impl<T: Transport> WakuA2ANode<T> {
         }
     }
 
+    /// Apply the trust list to an incoming task. Returns `true` if the
+    /// task should be surfaced to the caller, `false` if it should be
+    /// dropped.
+    ///
+    /// - `TrustMode::Off`: always accept (`is_trusted` returns true).
+    /// - `TrustMode::Enforce`: drop untrusted senders silently, bump
+    ///   the `tasks_dropped_untrusted` counter.
+    /// - `TrustMode::Log`: log a warning but still accept; bumps the
+    ///   counter for visibility.
+    fn accept_or_drop(&self, task: &Task) -> bool {
+        if self.is_trusted(&task.from) {
+            return true;
+        }
+        Metrics::inc(&self.metrics.tasks_dropped_untrusted);
+        match self.trust_mode() {
+            TrustMode::Off => true, // unreachable: is_trusted is always true in Off
+            TrustMode::Enforce => {
+                tracing::debug!(
+                    sender = %task.from,
+                    task_id = %task.id,
+                    "dropping task from untrusted sender"
+                );
+                false
+            }
+            TrustMode::Log => {
+                tracing::warn!(
+                    sender = %task.from,
+                    task_id = %task.id,
+                    "accepting task from untrusted sender (TrustMode::Log)"
+                );
+                true
+            }
+        }
+    }
+
     /// If the task has a `payload_cid`, fetch the full payload from storage.
     async fn maybe_fetch_offloaded(&self, task: Task) -> Result<Option<Task>> {
         if let Some(ref cid) = task.payload_cid {
@@ -151,14 +190,14 @@ impl<T: Transport> WakuA2ANode<T> {
 #[cfg(test)]
 mod tests {
     use crate::tasks::test_support::{fast_config, MockTransport};
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, Task};
     use logos_messaging_a2a_transport::Transport;
 
     #[tokio::test]
     async fn test_poll_tasks() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::new("echo", "echo agent", vec!["text".into()], transport);
+        let node = LmaoNode::new("echo", "echo agent", vec!["text".into()], transport);
 
         let tasks = node.poll_tasks().await.unwrap();
         assert!(tasks.is_empty());
@@ -167,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn test_malformed_json_ignored() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             "test",
             "test agent",
             vec![],
@@ -195,7 +234,7 @@ mod tests {
     #[tokio::test]
     async fn test_wrong_envelope_type_ignored() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             "test",
             "test agent",
             vec![],
@@ -227,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn test_ack_envelope_on_task_topic_ignored() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             "test",
             "test agent",
             vec![],
@@ -251,7 +290,7 @@ mod tests {
     async fn test_encrypted_task_without_identity_ignored() {
         let transport = MockTransport::new();
         // Node WITHOUT encryption
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             "test",
             "test agent",
             vec![],
@@ -281,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_poll_tasks_returns_empty_on_repeated_calls() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test agent", vec![], transport, fast_config());
+        let node = LmaoNode::with_config("test", "test agent", vec![], transport, fast_config());
 
         // Multiple polls on empty topic
         for _ in 0..5 {
@@ -294,7 +333,7 @@ mod tests {
     async fn test_task_with_payload_cid_but_no_storage_backend() {
         let transport = MockTransport::new();
         // Node WITHOUT storage offload configured
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -321,8 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_encrypted_node_decrypt_with_wrong_sender_pubkey_ignored() {
         let transport = MockTransport::new();
-        let receiver =
-            WakuA2ANode::new_encrypted("receiver", "receiver", vec![], transport.clone());
+        let receiver = LmaoNode::new_encrypted("receiver", "receiver", vec![], transport.clone());
         let topic = topics::task_topic(receiver.pubkey());
         let _ = receiver.poll_tasks().await.unwrap();
 
@@ -356,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_auto_created_on_incoming_task_with_session_id() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -367,7 +405,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let spk = sender.pubkey().to_string();
 
         // Create a session on sender side and send within it
@@ -394,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn incoming_session_task_tracked_in_existing_session() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -405,7 +443,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // Receiver pre-creates a session
         let session = receiver.create_session(sender.pubkey());
@@ -425,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn incoming_task_without_session_id_not_tracked() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -436,7 +474,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // Send a task without session_id
         let task = Task::new(sender.pubkey(), &rpk, "no session");
@@ -455,7 +493,7 @@ mod tests {
     #[tokio::test]
     async fn poll_receives_valid_task_envelope() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver agent",
             vec![],
@@ -481,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn poll_multiple_tasks_in_single_batch() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -506,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn poll_tasks_increments_metrics() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -537,8 +575,8 @@ mod tests {
     async fn poll_tasks_lazy_subscribes_on_first_call() {
         let transport = MockTransport::new();
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
-        let receiver = WakuA2ANode::with_config(
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -560,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn poll_tasks_deduplicates_via_bloom_filter() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -587,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn poll_presence_envelope_on_task_topic_ignored() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config(
+        let node = LmaoNode::with_config(
             "test",
             "test agent",
             vec![],
@@ -605,6 +643,7 @@ mod tests {
             waku_topic: "/topic".into(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(ann);
         let payload = serde_json::to_vec(&envelope).unwrap();
@@ -619,8 +658,8 @@ mod tests {
         let transport = MockTransport::new();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
-        let receiver = WakuA2ANode::with_config(
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -648,9 +687,9 @@ mod tests {
     async fn poll_tasks_encrypted_roundtrip() {
         let transport = MockTransport::new();
 
-        let sender = WakuA2ANode::new_encrypted("enc-sender", "sender", vec![], transport.clone());
+        let sender = LmaoNode::new_encrypted("enc-sender", "sender", vec![], transport.clone());
         let receiver =
-            WakuA2ANode::new_encrypted("enc-receiver", "receiver", vec![], transport.clone());
+            LmaoNode::new_encrypted("enc-receiver", "receiver", vec![], transport.clone());
         let rpk = receiver.pubkey().to_string();
         let _ = receiver.poll_tasks().await.unwrap();
 
@@ -679,10 +718,10 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config())
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config())
                 .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 1));
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -710,7 +749,7 @@ mod tests {
     #[tokio::test]
     async fn poll_tasks_multiple_sessions_tracked_independently() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -721,7 +760,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // Create two sessions and send tasks in each
         let s1 = sender.create_session(&rpk);
@@ -747,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn poll_tasks_response_envelope_ignored_as_new_task() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -758,7 +797,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let spk = sender.pubkey().to_string();
         let _ = sender.poll_tasks().await.unwrap();
 

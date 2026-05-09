@@ -2,3 +2,13 @@
 /module/build/
 demos/logos-core-e2e/target/
 dist/
+.claude/
+.demo/
+demo-data/
+dist/
+
+# Demo-only pi config — contains API keys for custom providers (Venice
+# etc.) that pi-ai doesn't have an env-var fallback for. Untracked so a
+# `git add -A` doesn't accidentally commit secrets.
+/demo-config/pi/agent/models.json
+/demo-config/pi/agent/auth.json

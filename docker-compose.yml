@@ -1,0 +1,151 @@
+# Container-per-agent fleet for the LMAO demo.
+#
+# Each service is the same `lmao:dev` image (built from the repo root
+# Dockerfile) running as non-root, with isolated filesystem, isolated
+# IPC socket, and outbound network only. Agents reach the host's
+# Ollama at `host.docker.internal:11434` (Linux: extra_hosts maps it to
+# the host gateway; macOS/Windows Docker Desktop sets it automatically).
+#
+# Bring up:
+#   docker compose up -d --build
+#
+# Drive from the host using the daemon sockets exposed via volumes:
+#   target/release/logos-messaging-a2a \
+#       --daemon-socket ./demo-data/alice-sock/lmao.sock daemon status
+#
+# See `scripts/demo-containerized.sh` and `make demo-containerized`.
+
+services:
+  alice:
+    build:
+      context: .
+      # Use host networking during the image build so the nimble deps
+      # the Nim build pulls (status-im/nim-* etc.) can resolve. Some
+      # Docker setups have flaky DNS in the default build network.
+      network: host
+    image: lmao:dev
+    container_name: lmao-alice
+    user: "1000:1000"
+    restart: unless-stopped
+    extra_hosts:
+      # Lets `--exec goose` reach an Ollama running on the host (Linux
+      # needs this; Docker Desktop already provides host.docker.internal).
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/alice:/data
+      - ./demo-data/alice-sock:/run/lmao
+    ports:
+      # Optional pass-through — useful when you want the bare-host
+      # `lmao` to dial directly into the agent. The agent dials *out*
+      # to logos.dev regardless of these mappings.
+      - "60010:60010/tcp"
+      - "9010:9010/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      OLLAMA_HOST: host.docker.internal
+      GOOSE_PROVIDER: ollama
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19200
+      --keyfile /data/keyfile
+      --tcp-port 60010 --udp-port 9010
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name alice --capabilities text,summarize
+        --exec "sh -c 'echo summarizer-stderr-line >&2; sed s/^/[summarized]\\ /'"
+
+  bob:
+    build:
+      context: .
+      # Use host networking during the image build so the nimble deps
+      # the Nim build pulls (status-im/nim-* etc.) can resolve. Some
+      # Docker setups have flaky DNS in the default build network.
+      network: host
+    image: lmao:dev
+    container_name: lmao-bob
+    user: "1000:1000"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/bob:/data
+      - ./demo-data/bob-sock:/run/lmao
+    ports:
+      - "60011:60011/tcp"
+      - "9011:9011/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      OLLAMA_HOST: host.docker.internal
+      GOOSE_PROVIDER: ollama
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19201
+      --keyfile /data/keyfile
+      --tcp-port 60011 --udp-port 9011
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name bob --capabilities code,review
+        --exec "sh -c 'echo reviewer-stderr-line >&2; sed s/^/[reviewed]\\ \\ \\ /'"
+
+  # Pi-analyst peer — runs the pi coding agent (https://pi.dev) inside
+  # the container so its read/bash/edit/write tools can probe the local
+  # filesystem freely without ever reaching the host. The pi binary +
+  # /usr/local/bin/pi-exec wrapper are baked into the image; pi config
+  # (LLM provider endpoints, model lists) is mounted read-only from the
+  # operator's host ~/.pi so credentials don't bake into the image.
+  pi-analyst:
+    build:
+      context: .
+      network: host
+    image: lmao:dev
+    container_name: lmao-pi-analyst
+    user: "1000:1000"
+    restart: unless-stopped
+    # Host networking so libstorage's TCP listen addrs (whatever the
+    # Codex node binds at startup) are reachable from Basecamp's
+    # libstorage on the same host. With the default bridge network the
+    # SPR points at a 172.x.x.x address that the host can't dial, so
+    # direct-dial fetches hang. Tradeoff: container shares host's
+    # network namespace, exposing all bound ports; fine on a trusted
+    # demo machine.
+    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./demo-data/pi-analyst:/data
+      - ./demo-data/pi-analyst-sock:/run/lmao
+      # Dedicated demo pi config (NOT the operator's host ~/.pi). Pins
+      # provider=lemonade-k11 + model=4B and contains only the providers
+      # the demo uses, so changes to the host's pi config can't bleed
+      # into the container. Read-only so the container can't write back.
+      - ./demo-config/pi:/home/lmao/.pi:ro
+    ports:
+      - "60012:60012/tcp"
+      - "9012:9012/udp"
+    environment:
+      LMAO_PRESENCE_REANNOUNCE_SECS: "15"
+      # Pi tools enabled — safe inside the container, gives the model
+      # real read/bash/curl access to ground its analysis.
+      PI_TOOLS: "1"
+      # Tool-call turns (curl + reason) can cross the default 180 s
+      # ceiling under load. Generous budget so the model isn't killed
+      # mid-fetch. Provider + model defaults live in
+      # demo-config/pi/agent/settings.json — no env override needed.
+      PI_TIMEOUT: "900"
+      # Pi writes per-thread session sidecars under PI_SESSION_DIR.
+      # Default would land in ~/.pi/sessions/lmao, but that mount is
+      # read-only (provider config). Redirect to the writable /data
+      # volume so session-resume / KV-cache reuse works.
+      PI_SESSION_DIR: "/data/pi-sessions"
+    command: >
+      --transport logos-delivery
+      --storage libstorage
+      --storage-data-dir /data/storage
+      --storage-port 19202
+      --keyfile /data/keyfile
+      --tcp-port 60012 --udp-port 9012
+      --daemon-socket /run/lmao/lmao.sock
+      agent run --name pi-analyst --capabilities analyze,review,explain,text
+        --exec /usr/local/bin/pi-exec

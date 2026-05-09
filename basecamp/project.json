@@ -1,0 +1,7 @@
+{
+  "type": "full-app",
+  "name": "agent",
+  "description": "Logos module + UI app",
+  "module": "agent-module",
+  "ui": "agent-ui"
+}

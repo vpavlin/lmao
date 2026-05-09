@@ -1,12 +1,13 @@
 use anyhow::Result;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 
 use crate::cli::SessionAction;
 use crate::common::{build_node, IdentityConfig};
 
 pub async fn handle(
     action: SessionAction,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {

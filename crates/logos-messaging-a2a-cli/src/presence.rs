@@ -1,9 +1,63 @@
-use anyhow::Result;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use anyhow::{anyhow, Result};
+use logos_messaging_a2a_transport::Transport;
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::cli::PresenceAction;
 use crate::common::{build_node, parse_capabilities, IdentityConfig};
+use crate::daemon::{default_socket_path, DaemonClient, Request, Response};
+
+/// Try the running daemon first for `presence peers`. Watch and announce
+/// modes still go through the local node since they're long-lived
+/// streaming operations and don't fit the one-shot RPC shape.
+async fn try_peers_via_daemon(
+    capability: Option<&str>,
+    daemon_socket: Option<&PathBuf>,
+    json: bool,
+) -> Result<bool> {
+    let socket = daemon_socket.cloned().unwrap_or_else(default_socket_path);
+    let client = DaemonClient::new(socket);
+    if !client.probe().await {
+        return Ok(false);
+    }
+    let resp = client
+        .send(Request::PresencePeers {
+            capability: capability.map(str::to_string),
+        })
+        .await?;
+    match resp {
+        Response::PresencePeers { peers } => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "via": "daemon",
+                        "peers": peers,
+                    }))?
+                );
+            } else if peers.is_empty() {
+                eprintln!("Source: daemon");
+                println!("No live peers in the daemon's PeerMap.");
+            } else {
+                eprintln!("Source: daemon");
+                println!("Found {} live peer(s):\n", peers.len());
+                for p in peers {
+                    println!("  Name:         {}", p.name);
+                    println!("  Capabilities: {}", p.capabilities.join(", "));
+                    println!("  Pubkey:       {}", p.agent_id);
+                    println!("  Waku topic:   {}", p.waku_topic);
+                    println!("  Last seen:    {}", p.last_seen_secs);
+                    println!("  Status:       TTL {}s", p.ttl_secs);
+                    println!();
+                }
+            }
+            Ok(true)
+        }
+        Response::Error { message } => Err(anyhow!("daemon error: {message}")),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
 
 fn print_peer(agent_id: &str, info: &logos_messaging_a2a_node::presence::PeerInfo) {
     let expired = if info.is_expired() { " [EXPIRED]" } else { "" };
@@ -33,10 +87,21 @@ fn peer_to_json(
 
 pub async fn handle(
     action: PresenceAction,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
+    daemon_socket: Option<&PathBuf>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
+    if let PresenceAction::Peers {
+        ref capability,
+        watch: false,
+        ..
+    } = action
+    {
+        if try_peers_via_daemon(capability.as_deref(), daemon_socket, json).await? {
+            return Ok(());
+        }
+    }
     match action {
         PresenceAction::Announce {
             name,
@@ -299,6 +364,7 @@ mod tests {
             waku_topic: "/waku/2/a2a-echo/proto".to_string(),
             ttl_secs: 300,
             last_seen: 1700000000,
+            load: None,
         };
         let value = peer_to_json("02abcdef", &info);
         let output = serde_json::to_string(&value).unwrap();

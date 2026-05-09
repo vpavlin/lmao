@@ -12,7 +12,7 @@ use proptest::prelude::*;
 
 /// Generate a random 32-byte hex string (valid X25519 secret key material).
 fn arb_secret_hex() -> impl Strategy<Value = String> {
-    prop::collection::vec(any::<u8>(), 32).prop_map(|bytes| hex::encode(bytes))
+    prop::collection::vec(any::<u8>(), 32).prop_map(hex::encode)
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use logos_messaging_a2a_core::{Part, TaskState};
 use logos_messaging_a2a_node::presence::PeerInfo;
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
 use logos_messaging_a2a_transport::Transport;
 use rmcp::{
@@ -16,7 +16,7 @@ use crate::state::{AgentRegistry, GetAgentStatusInput, SendToAgentInput};
 
 /// The MCP server that bridges to A2A over Waku.
 pub(crate) struct LogosA2ABridge<T: Transport> {
-    pub(crate) node: Arc<RwLock<WakuA2ANode<T>>>,
+    pub(crate) node: Arc<RwLock<LmaoNode<T>>>,
     pub(crate) agents: AgentRegistry,
     pub(crate) timeout_secs: u64,
     pub(crate) tool_router: ToolRouter<Self>,
@@ -37,7 +37,7 @@ impl<T: Transport> Clone for LogosA2ABridge<T> {
 #[tool_router]
 impl<T: Transport> LogosA2ABridge<T> {
     /// Create a bridge wrapping an existing node.
-    pub(crate) fn from_node(node: WakuA2ANode<T>, timeout_secs: u64) -> Self {
+    pub(crate) fn from_node(node: LmaoNode<T>, timeout_secs: u64) -> Self {
         Self {
             node: Arc::new(RwLock::new(node)),
             agents: Arc::new(RwLock::new(Vec::new())),
@@ -54,14 +54,26 @@ impl<T: Transport> LogosA2ABridge<T> {
     )]
     async fn discover_agents(&self) -> Result<CallToolResult, McpError> {
         let node = self.node.read().await;
-        let cards = node.discover().await.map_err(|e| McpError {
+        let new_cards = node.discover().await.map_err(|e| McpError {
             code: ErrorCode::INTERNAL_ERROR,
             message: format!("Discovery failed: {e}").into(),
             data: None,
         })?;
 
+        // Merge by public key into the cache. `discover()` only returns cards
+        // that arrived since the previous call, so replacing the cache would
+        // drop everything between announcements; merging matches what users
+        // expect ("all agents I've ever seen, latest copy wins").
         let mut agents = self.agents.write().await;
-        *agents = cards.clone();
+        for card in &new_cards {
+            if let Some(existing) = agents.iter_mut().find(|c| c.public_key == card.public_key) {
+                *existing = card.clone();
+            } else {
+                agents.push(card.clone());
+            }
+        }
+        let cards: Vec<_> = agents.clone();
+        drop(agents);
 
         if cards.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -297,7 +309,7 @@ pub(crate) fn format_peer_entry(index: usize, agent_id: &str, info: &PeerInfo) -
 impl LogosA2ABridge<LogosMessagingTransport> {
     pub(crate) fn new(waku_url: &str, timeout_secs: u64) -> Self {
         let transport = LogosMessagingTransport::new(waku_url);
-        let node = WakuA2ANode::new(
+        let node = LmaoNode::new(
             "mcp-bridge",
             "MCP bridge — proxies tool calls to Logos A2A agents",
             vec!["mcp-bridge".into()],
@@ -346,7 +358,7 @@ mod tests {
 
     /// Create a bridge backed by InMemoryTransport (no nwaku required).
     fn make_test_bridge(transport: InMemoryTransport) -> LogosA2ABridge<InMemoryTransport> {
-        let node = WakuA2ANode::new(
+        let node = LmaoNode::new(
             "mcp-bridge",
             "MCP bridge for tests",
             vec!["mcp-bridge".into()],
@@ -444,7 +456,7 @@ mod tests {
         let transport = InMemoryTransport::new();
 
         // Create an agent that announces on the same transport.
-        let echo = WakuA2ANode::new(
+        let echo = LmaoNode::new(
             "echo-agent",
             "Echoes messages back",
             vec!["echo".into(), "text".into()],
@@ -486,7 +498,7 @@ mod tests {
             ("translator", "Translates text", vec!["translate"]),
             ("coder", "Writes code", vec!["code", "text"]),
         ] {
-            let node = WakuA2ANode::new(
+            let node = LmaoNode::new(
                 name,
                 desc,
                 caps.into_iter().map(String::from).collect(),
@@ -510,22 +522,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_agents_cache_is_replaced_on_rediscovery() {
+    async fn discover_agents_cache_merges_across_rediscoveries() {
         let transport = InMemoryTransport::new();
+        let bridge = make_test_bridge(transport.clone());
 
         // First discovery: one agent.
-        let agent1 = WakuA2ANode::new("agent-1", "First", vec!["a".into()], transport.clone());
+        let agent1 = LmaoNode::new("agent-1", "First", vec!["a".into()], transport.clone());
         agent1.announce().await.unwrap();
-
-        let bridge = make_test_bridge(transport.clone());
         bridge.discover_agents().await.unwrap();
         assert_eq!(bridge.agents.read().await.len(), 1);
 
-        // Second discovery: the bridge re-discovers and gets agent-1 again
-        // (InMemoryTransport replays history). Cache should reflect the new snapshot.
+        // Second agent announces; rediscovery should *add* agent-2 to the
+        // cache without dropping agent-1. (`LmaoNode::discover()` keeps its
+        // subscription open between calls and only returns new arrivals,
+        // so the bridge merges by pubkey rather than replacing the cache.)
+        let agent2 = LmaoNode::new("agent-2", "Second", vec!["b".into()], transport.clone());
+        agent2.announce().await.unwrap();
         let result = bridge.discover_agents().await.unwrap();
         let text = result_text(&result);
-        assert!(text.contains("agent-1"));
+        assert!(text.contains("agent-1"), "agent-1 should remain in cache");
+        assert!(text.contains("agent-2"), "agent-2 should be added");
+        assert_eq!(bridge.agents.read().await.len(), 2);
     }
 
     // ── discover_agents response formatting ──
@@ -534,7 +551,7 @@ mod tests {
     async fn discover_agents_format_includes_version_and_pubkey() {
         let transport = InMemoryTransport::new();
 
-        let agent = WakuA2ANode::new(
+        let agent = LmaoNode::new(
             "format-check",
             "Checks formatting",
             vec!["test".into()],
@@ -580,7 +597,7 @@ mod tests {
         };
 
         // Create echo agent on the shared transport.
-        let echo = WakuA2ANode::with_config(
+        let echo = LmaoNode::with_config(
             "echo-agent",
             "Echoes messages",
             vec!["echo".into()],
@@ -593,7 +610,7 @@ mod tests {
         let _ = echo.poll_tasks().await.unwrap();
 
         // Create bridge with fast SDS config so send_reliable doesn't block.
-        let bridge_node = WakuA2ANode::with_config(
+        let bridge_node = LmaoNode::with_config(
             "mcp-bridge",
             "MCP bridge",
             vec!["mcp-bridge".into()],
@@ -747,8 +764,8 @@ mod tests {
     async fn discover_agents_numbered_list_format() {
         let transport = InMemoryTransport::new();
 
-        let a = WakuA2ANode::new("alpha", "Agent A", vec!["a".into()], transport.clone());
-        let b = WakuA2ANode::new("beta", "Agent B", vec!["b".into()], transport.clone());
+        let a = LmaoNode::new("alpha", "Agent A", vec!["a".into()], transport.clone());
+        let b = LmaoNode::new("beta", "Agent B", vec!["b".into()], transport.clone());
         a.announce().await.unwrap();
         b.announce().await.unwrap();
 
@@ -770,7 +787,7 @@ mod tests {
         let transport = InMemoryTransport::new();
 
         // An agent announces presence on the shared transport.
-        let agent = WakuA2ANode::new(
+        let agent = LmaoNode::new(
             "presence-agent",
             "Agent with presence",
             vec!["chat".into(), "search".into()],
@@ -807,7 +824,7 @@ mod tests {
             ("agent-beta", vec!["translate"]),
             ("agent-gamma", vec!["code", "review"]),
         ] {
-            let node = WakuA2ANode::new(
+            let node = LmaoNode::new(
                 name,
                 &format!("{name} agent"),
                 caps.into_iter().map(String::from).collect(),
@@ -830,8 +847,8 @@ mod tests {
     async fn discover_agents_presence_numbered_format() {
         let transport = InMemoryTransport::new();
 
-        let a = WakuA2ANode::new("first", "A", vec!["a".into()], transport.clone());
-        let b = WakuA2ANode::new("second", "B", vec!["b".into()], transport.clone());
+        let a = LmaoNode::new("first", "A", vec!["a".into()], transport.clone());
+        let b = LmaoNode::new("second", "B", vec!["b".into()], transport.clone());
         a.announce_presence().await.unwrap();
         b.announce_presence().await.unwrap();
 
@@ -878,6 +895,7 @@ mod tests {
             waku_topic: "/a2a/tasks/fake".to_string(),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(unsigned);
         let payload = serde_json::to_vec(&envelope).unwrap();
@@ -897,7 +915,7 @@ mod tests {
     async fn get_agent_status_online() {
         let transport = InMemoryTransport::new();
 
-        let agent = WakuA2ANode::new(
+        let agent = LmaoNode::new(
             "status-agent",
             "Agent for status check",
             vec!["echo".into()],
@@ -941,7 +959,7 @@ mod tests {
     async fn get_agent_status_shows_capabilities() {
         let transport = InMemoryTransport::new();
 
-        let agent = WakuA2ANode::new(
+        let agent = LmaoNode::new(
             "multi-cap",
             "Multi-capability agent",
             vec!["search".into(), "summarize".into(), "translate".into()],
@@ -966,7 +984,7 @@ mod tests {
     async fn get_agent_status_shows_truncated_agent_id() {
         let transport = InMemoryTransport::new();
 
-        let agent = WakuA2ANode::new(
+        let agent = LmaoNode::new(
             "truncated-id",
             "Agent",
             vec!["test".into()],
@@ -1021,6 +1039,7 @@ mod tests {
             waku_topic: "/a2a/tasks/abcdef".to_string(),
             ttl_secs: 300,
             last_seen: 1_700_000_000,
+            load: None,
         };
 
         let output = format_peer_entry(1, "abcdef1234567890abcdef", &info);
@@ -1039,6 +1058,7 @@ mod tests {
             waku_topic: "/a2a/tasks/short".to_string(),
             ttl_secs: 60,
             last_seen: 0,
+            load: None,
         };
 
         // Agent ID shorter than 16 chars should not panic.
@@ -1054,6 +1074,7 @@ mod tests {
             waku_topic: "/a2a/tasks/nocaps".to_string(),
             ttl_secs: 120,
             last_seen: 0,
+            load: None,
         };
 
         let output = format_peer_entry(1, "abcdef1234567890abcdef", &info);
@@ -1074,6 +1095,7 @@ mod tests {
             waku_topic: "/a2a/tasks/multi".to_string(),
             ttl_secs: 600,
             last_seen: 0,
+            load: None,
         };
 
         let output = format_peer_entry(3, "abcdef1234567890abcdef", &info);

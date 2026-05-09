@@ -4,7 +4,6 @@
 //!
 //! - **REST** (`rest` feature): nwaku REST API transport for communicating with a running nwaku node.
 //! - **Logos Core** (`logos-core` feature): native IPC transport via the Logos Core `delivery_module` plugin.
-//! - **Native Waku** (`native-waku` feature): libwaku FFI transport via the `waku-bindings` crate.
 //! - **In-memory**: zero-dependency mock transport for testing (`memory` module, always available).
 //!
 //! The [`sds`] submodule implements the SDS (Scalable Data Sync) reliability layer on top of
@@ -44,17 +43,23 @@ pub mod logos_core_transport;
 #[cfg(feature = "logos-core")]
 pub use logos_core_transport::LogosCoreDeliveryTransport;
 
-#[cfg(feature = "native-waku")]
-mod waku_bindings_transport;
-#[cfg(feature = "native-waku")]
-pub use waku_bindings_transport::NativeWakuTransport;
+#[cfg(feature = "logos-delivery")]
+pub mod logos_delivery;
+#[cfg(feature = "logos-delivery")]
+mod logos_delivery_sys;
+#[cfg(feature = "logos-delivery")]
+pub use logos_delivery::LogosDeliveryTransport;
 
-/// Swappable transport trait — real nwaku in production, in-memory mock in tests.
+/// Swappable transport trait — real Logos Messaging in production,
+/// in-memory mock in tests.
 ///
 /// Implementations:
-/// - `LogosMessagingTransport`: nwaku REST API (requires running nwaku node, `rest` feature)
-/// - `LogosCoreDeliveryTransport`: Logos Core IPC via delivery_module (`logos-core` feature)
-/// - `NativeWakuTransport`: native libwaku FFI via waku-bindings (`native-waku` feature)
+/// - `LogosDeliveryTransport`: embedded Logos Messaging node via
+///   liblogosdelivery FFI (`logos-delivery` feature) — the production default
+/// - `LogosMessagingTransport`: nwaku REST API (`rest` feature) — fallback
+///   when an external nwaku node is preferred
+/// - `LogosCoreDeliveryTransport`: Logos Core IPC via delivery_module
+///   (`logos-core` feature)
 /// - `InMemoryTransport`: in-process mock for testing (no external deps)
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
@@ -66,4 +71,19 @@ pub trait Transport: Send + Sync + 'static {
 
     /// Unsubscribe from a content topic.
     async fn unsubscribe(&self, topic: &str) -> Result<()>;
+}
+
+#[async_trait]
+impl Transport for std::sync::Arc<dyn Transport> {
+    async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        (**self).publish(topic, payload).await
+    }
+
+    async fn subscribe(&self, topic: &str) -> Result<mpsc::Receiver<Vec<u8>>> {
+        (**self).subscribe(topic).await
+    }
+
+    async fn unsubscribe(&self, topic: &str) -> Result<()> {
+        (**self).unsubscribe(topic).await
+    }
 }

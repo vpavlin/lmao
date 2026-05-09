@@ -10,8 +10,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use logos_messaging_a2a::{
-    A2AEnvelope, AgentId, ExecutionBackend, ExecutionError, InMemoryTransport, PaymentConfig, Task,
-    TransferDetails, Transport, TxHash, WakuA2ANode,
+    A2AEnvelope, AgentId, ExecutionBackend, ExecutionError, InMemoryTransport, LmaoNode,
+    PaymentConfig, Task, TransferDetails, Transport, TxHash,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     let payment_backend = MockPaymentBackend::new(1000, 0);
 
     // --- Agent A: Requester (auto-pays 100 tokens per task) ---
-    let agent_a = WakuA2ANode::new(
+    let agent_a = LmaoNode::new(
         "agent-a-requester",
         "Requests text summarization",
         vec!["text".to_string()],
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
     });
 
     // --- Agent B: Worker (requires 50 tokens minimum) ---
-    let agent_b = WakuA2ANode::new(
+    let agent_b = LmaoNode::new(
         "agent-b-worker",
         "Summarizes text for payment",
         vec!["text".to_string(), "summarization".to_string()],

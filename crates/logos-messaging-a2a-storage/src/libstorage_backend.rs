@@ -26,7 +26,7 @@ impl LibstorageBackend {
     ///
     /// * `data_dir` — persistent storage directory
     pub async fn new(data_dir: impl AsRef<Path>) -> Result<Self, StorageError> {
-        Self::with_config(data_dir, None, None).await
+        Self::with_config(data_dir, None, None, &[]).await
     }
 
     /// Create with explicit configuration options.
@@ -34,10 +34,15 @@ impl LibstorageBackend {
     /// * `data_dir`        — persistent storage directory
     /// * `discovery_port`  — UDP port for peer discovery (`None` uses the default)
     /// * `storage_quota`   — maximum bytes the node may store (`None` for unlimited)
+    /// * `bootstrap_nodes` — SPR strings (or multiaddrs) of peer storage
+    ///   nodes to dial at startup. Mirrors Waku's `--entry-node`: lets
+    ///   two storage nodes find each other directly without a public DHT.
+    ///   Empty slice = no bootstrap (only useful when running standalone).
     pub async fn with_config(
         data_dir: impl AsRef<Path>,
         discovery_port: Option<u16>,
         storage_quota: Option<u64>,
+        bootstrap_nodes: &[String],
     ) -> Result<Self, StorageError> {
         let data_dir = data_dir.as_ref();
         let scratch = data_dir.join("scratch");
@@ -53,6 +58,9 @@ impl LibstorageBackend {
         if let Some(quota) = storage_quota {
             config = config.storage_quota(quota);
         }
+        for spr in bootstrap_nodes {
+            config = config.add_bootstrap_node(spr.clone());
+        }
 
         let node = StorageNode::new(config)
             .await
@@ -66,6 +74,15 @@ impl LibstorageBackend {
             node: Arc::new(node),
             scratch,
         })
+    }
+
+    /// This node's Signed Peer Record. Hand this string to a peer's
+    /// `--storage-bootstrap` flag to direct-dial them into our DHT.
+    pub async fn spr(&self) -> Result<String, StorageError> {
+        self.node
+            .spr()
+            .await
+            .map_err(|e| StorageError::Http(format!("spr query failed: {e}")))
     }
 
     /// Stop the embedded node gracefully (consumes self).

@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use logos_messaging_a2a_crypto::AgentIdentity;
 
 fn bench_key_generation(c: &mut Criterion) {
-    c.bench_function("key_generation", |b| b.iter(|| AgentIdentity::generate()));
+    c.bench_function("key_generation", |b| b.iter(AgentIdentity::generate));
 }
 
 fn bench_shared_key_derivation(c: &mut Criterion) {

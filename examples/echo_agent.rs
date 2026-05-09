@@ -8,7 +8,7 @@
 //!   cargo run --example echo_agent -- --encrypt
 
 use anyhow::Result;
-use logos_messaging_a2a::{LogosMessagingTransport, WakuA2ANode};
+use logos_messaging_a2a::{LmaoNode, LogosMessagingTransport};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,14 +25,14 @@ async fn main() -> Result<()> {
 
     let transport = LogosMessagingTransport::new(&waku_url);
     let node = if encrypt {
-        WakuA2ANode::new_encrypted(
+        LmaoNode::new_encrypted(
             "echo",
             "Echoes back any text message (encrypted)",
             vec!["text".to_string()],
             transport,
         )
     } else {
-        WakuA2ANode::new(
+        LmaoNode::new(
             "echo",
             "Echoes back any text message",
             vec!["text".to_string()],

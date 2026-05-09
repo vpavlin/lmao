@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use logos_messaging_a2a::{
-    A2AEnvelope, AgentIdentity, InMemoryTransport, Task, Transport, WakuA2ANode,
+    A2AEnvelope, AgentIdentity, InMemoryTransport, LmaoNode, Task, Transport,
 };
 
 #[tokio::main]
@@ -28,13 +28,13 @@ async fn run_plaintext() -> Result<()> {
 
     let transport = InMemoryTransport::new();
 
-    let ping = WakuA2ANode::new(
+    let ping = LmaoNode::new(
         "ping",
         "Sends ping messages",
         vec!["text".to_string()],
         transport.clone(),
     );
-    let pong = WakuA2ANode::new(
+    let pong = LmaoNode::new(
         "pong",
         "Responds to pings with pongs",
         vec!["text".to_string()],
@@ -97,13 +97,13 @@ async fn run_encrypted() -> Result<()> {
 
     let transport = InMemoryTransport::new();
 
-    let ping = WakuA2ANode::new_encrypted(
+    let ping = LmaoNode::new_encrypted(
         "ping",
         "Sends encrypted ping messages",
         vec!["text".to_string()],
         transport.clone(),
     );
-    let pong = WakuA2ANode::new_encrypted(
+    let pong = LmaoNode::new_encrypted(
         "pong",
         "Responds to encrypted pings",
         vec!["text".to_string()],

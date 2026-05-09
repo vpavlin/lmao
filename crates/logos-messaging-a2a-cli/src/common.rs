@@ -1,7 +1,9 @@
-use anyhow::Result;
-use logos_messaging_a2a_node::WakuA2ANode;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
-use std::path::PathBuf;
+use anyhow::{Context, Result};
+use logos_messaging_a2a_crypto::AgentIdentity;
+use logos_messaging_a2a_node::LmaoNode;
+use logos_messaging_a2a_transport::Transport;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub fn parse_capabilities(capabilities: &str) -> Vec<String> {
     capabilities
@@ -17,7 +19,7 @@ pub struct IdentityConfig {
     pub encrypt: bool,
 }
 
-/// Build a [`WakuA2ANode`] using the global identity flags.
+/// Build a [`LmaoNode`] using the global identity flags.
 ///
 /// When `--keyfile` is provided, the node loads (or creates) a persistent
 /// signing key so that every CLI invocation shares the same pubkey and
@@ -29,22 +31,67 @@ pub fn build_node(
     name: &str,
     description: &str,
     capabilities: Vec<String>,
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
-) -> Result<WakuA2ANode<LogosMessagingTransport>> {
+) -> Result<LmaoNode<Arc<dyn Transport>>> {
     let node = if let Some(ref path) = identity.keyfile {
-        WakuA2ANode::from_keyfile(name, description, capabilities, transport, path)?
+        let node = LmaoNode::from_keyfile(name, description, capabilities, transport, path)?;
+        // Sealed presence needs an X25519 identity. When the user has
+        // a keyfile, auto-load/generate a sidecar `.x25519` next to it
+        // so encryption pubkey is stable across restarts. This makes
+        // the friend-keyring exchange one-time: nicknames don't change
+        // identity hex.
+        let x25519_path = sidecar_x25519_path(path);
+        let x_identity = load_or_create_x25519(&x25519_path)?;
+        node.with_identity(x_identity)
     } else if identity.encrypt {
-        WakuA2ANode::new_encrypted(name, description, capabilities, transport)
+        LmaoNode::new_encrypted(name, description, capabilities, transport)
     } else {
-        WakuA2ANode::new(name, description, capabilities, transport)
+        LmaoNode::new(name, description, capabilities, transport)
     };
     Ok(node)
+}
+
+fn sidecar_x25519_path(keyfile: &Path) -> PathBuf {
+    let mut p = keyfile.to_path_buf();
+    let ext = match keyfile.extension().and_then(|e| e.to_str()) {
+        Some(e) => format!("{e}.x25519"),
+        None => "x25519".to_string(),
+    };
+    p.set_extension(ext);
+    p
+}
+
+fn load_or_create_x25519(path: &Path) -> Result<AgentIdentity> {
+    if path.exists() {
+        let hex = std::fs::read_to_string(path)
+            .with_context(|| format!("reading X25519 sidecar {}", path.display()))?;
+        AgentIdentity::from_hex(hex.trim())
+            .with_context(|| format!("parsing X25519 secret in {}", path.display()))
+    } else {
+        let id = AgentIdentity::generate();
+        write_secret_file(path, &id.secret_hex())
+            .with_context(|| format!("writing X25519 sidecar {}", path.display()))?;
+        Ok(id)
+    }
+}
+
+fn write_secret_file(path: &Path, hex_secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(hex_secret.as_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use logos_messaging_a2a_transport::memory::InMemoryTransport;
 
     #[test]
     fn parse_single_capability() {
@@ -61,7 +108,7 @@ mod tests {
 
     #[test]
     fn build_node_ephemeral() {
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: None,
             encrypt: false,
@@ -72,7 +119,7 @@ mod tests {
 
     #[test]
     fn build_node_encrypted() {
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: None,
             encrypt: true,
@@ -85,7 +132,7 @@ mod tests {
     fn build_node_with_keyfile() {
         let dir = tempfile::tempdir().unwrap();
         let keypath = dir.path().join("test.key");
-        let transport = LogosMessagingTransport::new("http://localhost:8645");
+        let transport: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let id = IdentityConfig {
             keyfile: Some(keypath.clone()),
             encrypt: false,
@@ -94,7 +141,7 @@ mod tests {
         let pk1 = node1.pubkey().to_string();
 
         // Second build with same keyfile should produce same pubkey
-        let transport2 = LogosMessagingTransport::new("http://localhost:8645");
+        let transport2: Arc<dyn Transport> = Arc::new(InMemoryTransport::new());
         let node2 = build_node("test", "test node", vec![], transport2, &id).unwrap();
         assert_eq!(pk1, node2.pubkey());
     }

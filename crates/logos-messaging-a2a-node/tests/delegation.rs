@@ -1,7 +1,7 @@
 //! Integration tests for multi-agent task delegation.
 
 use logos_messaging_a2a_core::{DelegationRequest, DelegationStrategy};
-use logos_messaging_a2a_node::WakuA2ANode;
+use logos_messaging_a2a_node::LmaoNode;
 use logos_messaging_a2a_transport::memory::InMemoryTransport;
 use logos_messaging_a2a_transport::sds::ChannelConfig;
 use std::time::Duration;
@@ -20,9 +20,9 @@ async fn make_announced_node(
     name: &str,
     capabilities: Vec<&str>,
     transport: InMemoryTransport,
-) -> WakuA2ANode<InMemoryTransport> {
+) -> LmaoNode<InMemoryTransport> {
     let caps = capabilities.into_iter().map(String::from).collect();
-    let node = WakuA2ANode::with_config(
+    let node = LmaoNode::with_config(
         name,
         &format!("{name} agent"),
         caps,
@@ -36,7 +36,7 @@ async fn make_announced_node(
 }
 
 /// Helper: run a simple echo-agent loop that responds to one task.
-async fn echo_once(node: &WakuA2ANode<InMemoryTransport>) {
+async fn echo_once(node: &LmaoNode<InMemoryTransport>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while tokio::time::Instant::now() < deadline {
         let tasks = node.poll_tasks().await.unwrap();
@@ -68,6 +68,7 @@ async fn delegate_task_to_first_available_peer() {
         subtask_text: "Hello worker".to_string(),
         strategy: DelegationStrategy::FirstAvailable,
         timeout_secs: 5,
+        session_id: None,
     };
 
     // Worker echoes in background
@@ -103,6 +104,7 @@ async fn delegate_task_with_capability_match() {
             capability: "summarize".to_string(),
         },
         timeout_secs: 5,
+        session_id: None,
     };
 
     let summarizer_handle = tokio::spawn(async move {
@@ -131,6 +133,7 @@ async fn delegate_task_no_peers_fails() {
         subtask_text: "Nobody home".to_string(),
         strategy: DelegationStrategy::FirstAvailable,
         timeout_secs: 1,
+        session_id: None,
     };
 
     let err = orchestrator.delegate_task(&request).await.unwrap_err();
@@ -153,6 +156,7 @@ async fn delegate_task_no_matching_capability_fails() {
             capability: "image".to_string(),
         },
         timeout_secs: 1,
+        session_id: None,
     };
 
     let err = orchestrator.delegate_task(&request).await.unwrap_err();
@@ -175,6 +179,7 @@ async fn delegate_task_timeout_returns_failure_result() {
         subtask_text: "No reply expected".to_string(),
         strategy: DelegationStrategy::FirstAvailable,
         timeout_secs: 1,
+        session_id: None,
     };
 
     let result = orchestrator.delegate_task(&request).await.unwrap();
@@ -201,6 +206,7 @@ async fn delegate_broadcast_collects_multiple_responses() {
             capability: "text".to_string(),
         },
         timeout_secs: 10,
+        session_id: None,
     };
 
     // Both workers echo in background
@@ -241,6 +247,7 @@ async fn delegate_broadcast_no_peers_fails() {
         subtask_text: "Nobody".to_string(),
         strategy: DelegationStrategy::BroadcastCollect,
         timeout_secs: 1,
+        session_id: None,
     };
 
     let err = orchestrator.delegate_broadcast(&request).await.unwrap_err();
@@ -262,6 +269,7 @@ async fn delegate_task_default_timeout_when_zero() {
         subtask_text: "Quick task".to_string(),
         strategy: DelegationStrategy::FirstAvailable,
         timeout_secs: 0, // should use default
+        session_id: None,
     };
 
     let worker_handle = tokio::spawn(async move {
@@ -293,6 +301,7 @@ async fn delegate_broadcast_partial_timeout() {
             capability: "text".to_string(),
         },
         timeout_secs: 2,
+        session_id: None,
     };
 
     let worker_handle = tokio::spawn(async move {
@@ -325,6 +334,7 @@ async fn delegation_result_carries_correct_subtask_id() {
         subtask_text: "Check subtask ID".to_string(),
         strategy: DelegationStrategy::FirstAvailable,
         timeout_secs: 5,
+        session_id: None,
     };
 
     let worker_handle = tokio::spawn(async move {
@@ -343,7 +353,7 @@ async fn delegation_result_carries_correct_subtask_id() {
 // ── Round-Robin Delegation Tests ──
 
 /// Helper: run an echo-agent loop that responds to N tasks.
-async fn echo_n(node: &WakuA2ANode<InMemoryTransport>, n: usize) {
+async fn echo_n(node: &LmaoNode<InMemoryTransport>, n: usize) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut count = 0;
     while count < n && tokio::time::Instant::now() < deadline {
@@ -395,6 +405,7 @@ async fn round_robin_distributes_evenly() {
             subtask_text: format!("round-robin task {i}"),
             strategy: DelegationStrategy::RoundRobin,
             timeout_secs: 5,
+            session_id: None,
         };
         let result = orchestrator.delegate_task(&request).await.unwrap();
         assert!(result.success, "task {i} should succeed");
@@ -441,6 +452,7 @@ async fn round_robin_wraps_around() {
             subtask_text: format!("wrap task {i}"),
             strategy: DelegationStrategy::RoundRobin,
             timeout_secs: 5,
+            session_id: None,
         };
         let result = orchestrator.delegate_task(&request).await.unwrap();
         assert!(result.success, "task {i} should succeed");
@@ -484,6 +496,7 @@ async fn round_robin_single_peer() {
             subtask_text: format!("solo task {i}"),
             strategy: DelegationStrategy::RoundRobin,
             timeout_secs: 5,
+            session_id: None,
         };
         let result = orchestrator.delegate_task(&request).await.unwrap();
         assert!(result.success, "task {i} should succeed");
@@ -509,6 +522,7 @@ async fn round_robin_no_peers_fails() {
         subtask_text: "Nobody home".to_string(),
         strategy: DelegationStrategy::RoundRobin,
         timeout_secs: 1,
+        session_id: None,
     };
 
     let err = orchestrator.delegate_task(&request).await.unwrap_err();
@@ -531,6 +545,7 @@ async fn round_robin_broadcast_sends_to_all() {
         subtask_text: "Broadcast via round-robin".to_string(),
         strategy: DelegationStrategy::RoundRobin,
         timeout_secs: 5,
+        session_id: None,
     };
 
     let ha = tokio::spawn(async move { echo_once(&worker_a).await });

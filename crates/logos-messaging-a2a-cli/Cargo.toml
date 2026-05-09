@@ -7,10 +7,17 @@ edition = "2021"
 name = "logos-messaging-a2a"
 path = "src/main.rs"
 
+[features]
+default = ["rest"]
+rest = ["logos-messaging-a2a-transport/rest"]
+logos-delivery = ["logos-messaging-a2a-transport/logos-delivery"]
+libstorage = ["logos-messaging-a2a-storage/libstorage"]
+
 [dependencies]
 logos-messaging-a2a-crypto = { path = "../logos-messaging-a2a-crypto" }
 logos-messaging-a2a-core = { path = "../logos-messaging-a2a-core" }
-logos-messaging-a2a-transport = { path = "../logos-messaging-a2a-transport" }
+logos-messaging-a2a-transport = { path = "../logos-messaging-a2a-transport", default-features = false }
+logos-messaging-a2a-storage = { path = "../logos-messaging-a2a-storage", default-features = false }
 logos-messaging-a2a-node = { path = "../logos-messaging-a2a-node" }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -22,6 +29,10 @@ hex = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
 tracing-subscriber = { workspace = true }
+base64 = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

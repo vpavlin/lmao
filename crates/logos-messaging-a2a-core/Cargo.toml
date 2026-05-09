@@ -7,14 +7,17 @@ edition = "2021"
 logos-messaging-a2a-crypto = { path = "../logos-messaging-a2a-crypto" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_bytes = "0.11"
 uuid = { workspace = true }
 k256 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

@@ -1,10 +1,27 @@
 # Follow-up Issues
 
-Pre-written GitHub issues for the logos-messaging-a2a project. File these after the v0.1 prototype is stable.
+> **Note:** GitHub Issues are now enabled on this repo. New work is tracked
+> at <https://github.com/vpavlin/lmao/issues>. The pre-written entries
+> below remain as a historical record — most are superseded by filed
+> issues, see annotations.
 
 ---
 
 ## Issue #1: Use logos-delivery-rust-bindings as primary transport
+
+**Status:** ⚠️ SUPERSEDED by [GitHub issue #1](https://github.com/vpavlin/lmao/issues/1)
+— `feat: LogosDeliveryTransport via liblogosdelivery FFI`.
+
+The original plan targeted `logos-delivery-rust-bindings`, which wraps
+upstream `libwaku` and does not expose the `logos.dev` network preset.
+Replaced by a direct integration with
+[`liblogosdelivery`](https://github.com/logos-messaging/logos-delivery/tree/master/liblogosdelivery),
+which has `{"preset": "logos.dev"}` baked in (auto-wires entry nodes,
+cluster ID, sharding, content-topic→pubsub translation) — eliminating
+manual peer configuration at demo time.
+
+<details>
+<summary>Original (historical)</summary>
 
 **Labels:** `enhancement`, `transport`, `priority:high`
 
@@ -23,7 +40,7 @@ The v0.1 prototype uses the nwaku REST API (`http://localhost:8645`) because the
 - [ ] Make `LogosDeliveryTransport` the default, with `NwakuRestTransport` as opt-in fallback
 - [ ] Document build prerequisites in README
 
-**Link:** https://github.com/logos-messaging/logos-delivery-rust-bindings
+</details>
 
 ---
 
@@ -67,7 +84,7 @@ The current "minimal-SDS" provides:
 - `IntroBundle` for out-of-band key exchange
 - `A2AEnvelope::EncryptedTask` variant for encrypted task payloads
 - `AgentCard.intro_bundle` field for advertising encryption support
-- `WakuA2ANode::new_encrypted()` constructor
+- `LmaoNode::new_encrypted()` constructor
 - CLI `--encrypt` flag and `agent bundle` command
 - Backward compatible: plaintext mode still works
 
@@ -115,7 +132,7 @@ Logos Core uses a plugin architecture where `.so` modules implement `IComponent`
 
 **Tasks:**
 - [ ] Define `IComponent` interface for logos-messaging-a2a
-- [ ] Expose `WakuA2ANode` lifecycle via C FFI
+- [ ] Expose `LmaoNode` lifecycle via C FFI
 - [ ] Create QML UI for agent management
 - [ ] Integration tests with Logos Core runtime
 
@@ -134,7 +151,7 @@ MCP is the standard for connecting AI models to external tools. An MCP bridge wo
 - Any MCP-compatible AI client
 
 **Approach:**
-- MCP server that wraps `WakuA2ANode`
+- MCP server that wraps `LmaoNode`
 - Each discovered agent becomes an MCP tool
 - Tool calls translate to A2A tasks
 - Responses stream back via MCP

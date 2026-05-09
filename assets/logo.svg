@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LMAO mark — wordmark version, clean text rendering.
+
+  256×256, rounded-square background with bold lowercase "lmao"
+  centered. Uses SVG <text> with a generic sans-serif fallback chain
+  so it renders consistently in browsers, Qt SVG, librsvg, GitHub.
+
+  Designed to stay legible at the Basecamp sidebar icon size (32 px).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="LMAO">
+  <title>LMAO</title>
+
+  <!-- Rounded-square background -->
+  <rect x="0" y="0" width="256" height="256" rx="48" ry="48" fill="#0d1117"/>
+  <rect x="3" y="3" width="250" height="250" rx="46" ry="46" fill="none"
+        stroke="#21262d" stroke-width="2"/>
+
+  <!-- Wordmark — generic sans, heavy weight, kerning tightened so the
+       four letters fit the 256 px canvas with comfortable side margin. -->
+  <text x="128" y="170"
+        font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-weight="800"
+        font-size="110"
+        fill="#7ee787"
+        text-anchor="middle">lmao</text>
+</svg>

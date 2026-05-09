@@ -2,9 +2,9 @@ use logos_messaging_a2a_core::Task;
 use logos_messaging_a2a_execution::AgentId;
 use logos_messaging_a2a_transport::Transport;
 
-use crate::{Result, WakuA2ANode};
+use crate::{LmaoNode, Result};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// If auto-pay is enabled, call `backend.pay()` and attach proof to the task.
     pub async fn maybe_auto_pay(&self, task: &Task) -> Result<Task> {
         if let Some(ref pay_cfg) = self.payment {
@@ -133,7 +133,7 @@ mod tests {
         fast_config, FailingPayBackend, FailingVerifyBackend, MockExecutionBackend, MockTransport,
         VerifyingBackend,
     };
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::Task;
     use logos_messaging_a2a_execution::{ExecutionBackend, TransferDetails};
     use std::sync::Arc;
@@ -157,7 +157,7 @@ mod tests {
         let backend = Arc::new(MockExecutionBackend);
 
         // Receiver requires payment of 50
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver agent",
             vec![],
@@ -178,7 +178,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         // Sender does NOT pay
-        let sender = WakuA2ANode::with_config(
+        let sender = LmaoNode::with_config(
             "sender",
             "sender agent",
             vec![],
@@ -200,7 +200,7 @@ mod tests {
         let backend = Arc::new(MockExecutionBackend);
 
         // Receiver requires payment and listens
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver agent",
             vec![],
@@ -219,7 +219,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         // Sender with auto-pay enabled
-        let sender = WakuA2ANode::with_config(
+        let sender = LmaoNode::with_config(
             "sender",
             "sender agent",
             vec![],
@@ -258,7 +258,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver agent",
             vec![],
@@ -276,7 +276,7 @@ mod tests {
         let recipient_pubkey = receiver.pubkey().to_string();
         let _ = receiver.poll_tasks().await.unwrap();
 
-        let sender = WakuA2ANode::with_config(
+        let sender = LmaoNode::with_config(
             "sender",
             "sender agent",
             vec![],
@@ -313,7 +313,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -332,7 +332,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let mut task = Task::new(sender.pubkey(), &rpk, "underpaid");
         task.payment_tx = Some("0xunderpaid".to_string());
         task.payment_amount = Some(10);
@@ -352,7 +352,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -371,7 +371,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let mut task = Task::new(sender.pubkey(), &rpk, "wrong dest");
         task.payment_tx = Some("0xwrongdest".to_string());
         task.payment_amount = Some(100);
@@ -384,7 +384,7 @@ mod tests {
         let transport = MockTransport::new();
         let backend: Arc<dyn ExecutionBackend> = Arc::new(FailingVerifyBackend);
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -403,7 +403,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let mut task = Task::new(sender.pubkey(), &rpk, "bad tx");
         task.payment_tx = Some("0xnonexistent".to_string());
         task.payment_amount = Some(100);
@@ -423,7 +423,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -442,7 +442,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let mut task = Task::new(sender.pubkey(), &rpk, "valid payment");
         task.payment_tx = Some("0xgoodtx".to_string());
         task.payment_amount = Some(200);
@@ -457,7 +457,7 @@ mod tests {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -476,7 +476,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // Task with empty tx hash
         let mut task = Task::new(sender.pubkey(), &rpk, "empty tx");
@@ -493,7 +493,7 @@ mod tests {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -512,7 +512,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // No payment at all
         let task = Task::new(sender.pubkey(), &rpk, "free task");
@@ -529,7 +529,7 @@ mod tests {
     #[tokio::test]
     async fn test_node_without_payment_config_accepts_all() {
         let transport = MockTransport::new();
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -540,7 +540,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         let task = Task::new(sender.pubkey(), &rpk, "no payment config");
         sender.send_task(&task).await.unwrap();
@@ -557,7 +557,7 @@ mod tests {
     async fn test_maybe_auto_pay_disabled() {
         let backend = Arc::new(MockExecutionBackend);
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 0,
@@ -578,7 +578,7 @@ mod tests {
     async fn test_maybe_auto_pay_zero_amount() {
         let backend = Arc::new(MockExecutionBackend);
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 0,
@@ -598,7 +598,7 @@ mod tests {
     async fn test_maybe_auto_pay_attaches_tx_hash() {
         let backend = Arc::new(MockExecutionBackend);
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 0,
@@ -617,7 +617,7 @@ mod tests {
     #[tokio::test]
     async fn test_maybe_auto_pay_no_payment_config() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::new("test", "test", vec![], transport);
+        let node = LmaoNode::new("test", "test", vec![], transport);
 
         let task = Task::new(node.pubkey(), "02aa", "no config");
         let result = node.maybe_auto_pay(&task).await.unwrap();
@@ -637,7 +637,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -656,7 +656,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
         let mut task = Task::new(sender.pubkey(), &rpk, "case test");
         task.payment_tx = Some("0xcasetx".to_string());
         task.payment_amount = Some(200);
@@ -682,7 +682,7 @@ mod tests {
             },
         });
 
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -701,7 +701,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config());
 
         // First use — accepted
         let mut t1 = Task::new(sender.pubkey(), &rpk, "first");
@@ -722,15 +722,14 @@ mod tests {
     fn test_with_payment_builder() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node =
-            WakuA2ANode::new("test", "test", vec![], transport).with_payment(PaymentConfig {
-                backend,
-                required_amount: 42,
-                auto_pay: true,
-                auto_pay_amount: 10,
-                verify_on_chain: true,
-                receiving_account: "0xabc".to_string(),
-            });
+        let node = LmaoNode::new("test", "test", vec![], transport).with_payment(PaymentConfig {
+            backend,
+            required_amount: 42,
+            auto_pay: true,
+            auto_pay_amount: 10,
+            verify_on_chain: true,
+            receiving_account: "0xabc".to_string(),
+        });
         assert!(node.payment.is_some());
         let pay = node.payment.as_ref().unwrap();
         assert_eq!(pay.required_amount, 42);
@@ -745,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn test_verify_payment_direct_no_config() {
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config());
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config());
 
         let task = Task::new("02sender", node.pubkey(), "no config");
         assert!(node.verify_payment(&task).await);
@@ -755,7 +754,7 @@ mod tests {
     async fn test_verify_payment_direct_zero_required() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 0,
@@ -773,7 +772,7 @@ mod tests {
     async fn test_verify_payment_offline_exact_boundary() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 100,
@@ -797,7 +796,7 @@ mod tests {
     async fn test_verify_payment_offline_insufficient_some_amount() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 100,
@@ -821,7 +820,7 @@ mod tests {
     async fn test_verify_payment_offline_none_amount_with_tx_hash() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 100,
@@ -845,7 +844,7 @@ mod tests {
     async fn test_verify_payment_no_tx_hash() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 50,
@@ -866,7 +865,7 @@ mod tests {
     async fn test_verify_payment_replay_blocks_second_use() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 50,
@@ -891,7 +890,7 @@ mod tests {
     async fn test_verify_payment_different_tx_hashes_both_accepted() {
         let transport = MockTransport::new();
         let backend = Arc::new(MockExecutionBackend);
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 50,
@@ -931,7 +930,7 @@ mod tests {
             },
         });
 
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 100,
@@ -963,7 +962,7 @@ mod tests {
             },
         });
 
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 100,
@@ -987,7 +986,7 @@ mod tests {
     async fn test_maybe_auto_pay_backend_failure() {
         let backend = Arc::new(FailingPayBackend);
         let transport = MockTransport::new();
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_payment(PaymentConfig {
                 backend,
                 required_amount: 0,

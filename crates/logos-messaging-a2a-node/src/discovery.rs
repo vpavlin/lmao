@@ -1,14 +1,14 @@
-//! Discovery, presence, and registry operations for [`WakuA2ANode`].
+//! Discovery, presence, and registry operations for [`LmaoNode`].
 
-use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement};
+use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement, SealedStatus};
 use logos_messaging_a2a_transport::Transport;
 use std::collections::HashMap;
 
 use crate::metrics::Metrics;
 use crate::presence;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{LmaoNode, NodeError, Result};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Broadcast this agent's card on the discovery topic.
     ///
     /// Discovery uses raw A2AEnvelope (not SDS-wrapped) since it's a
@@ -26,13 +26,33 @@ impl<T: Transport> WakuA2ANode<T> {
         Ok(())
     }
 
-    /// Discover agents by subscribing to the discovery topic and draining messages.
+    /// Discover agents by draining the discovery topic.
+    ///
+    /// The subscription is opened lazily on the first call and kept alive
+    /// for the lifetime of the node, so repeated calls return only what
+    /// has arrived since the previous call. This matters on real-network
+    /// gossip transports where messages aren't buffered before subscribe —
+    /// the previous implementation subscribed-and-immediately-unsubscribed
+    /// inside each call and missed everything between.
+    ///
+    /// Typical usage on a real network:
+    /// ```ignore
+    /// node.discover().await?;          // open subscription
+    /// node.announce().await?;          // peers announce
+    /// tokio::time::sleep(Duration::from_secs(3)).await;
+    /// let cards = node.discover().await?;  // drain
+    /// ```
     pub async fn discover(&self) -> Result<Vec<AgentCard>> {
-        let mut rx = self
-            .channel
-            .transport()
-            .subscribe(topics::DISCOVERY)
-            .await?;
+        let mut rx_guard = self.discover_rx.lock().await;
+        if rx_guard.is_none() {
+            *rx_guard = Some(
+                self.channel
+                    .transport()
+                    .subscribe(topics::DISCOVERY)
+                    .await?,
+            );
+        }
+        let rx = rx_guard.as_mut().unwrap();
 
         let mut cards = Vec::new();
         while let Ok(msg) = rx.try_recv() {
@@ -43,11 +63,6 @@ impl<T: Transport> WakuA2ANode<T> {
             }
         }
 
-        let _ = self
-            .channel
-            .transport()
-            .unsubscribe(topics::DISCOVERY)
-            .await;
         Metrics::inc_by(&self.metrics.discoveries, cards.len() as u64);
         Ok(cards)
     }
@@ -133,6 +148,7 @@ impl<T: Transport> WakuA2ANode<T> {
 
     /// Broadcast a presence announcement with a custom TTL.
     pub async fn announce_presence_with_ttl(&self, ttl_secs: u64) -> Result<()> {
+        let sealed = self.build_sealed_status_envelopes();
         let mut announcement = PresenceAnnouncement {
             agent_id: self.pubkey().to_string(),
             name: self.card.name.clone(),
@@ -140,6 +156,7 @@ impl<T: Transport> WakuA2ANode<T> {
             waku_topic: topics::task_topic(self.pubkey()),
             ttl_secs,
             signature: None,
+            sealed_status: sealed,
         };
         announcement.sign(&self.signing_key)?;
         let envelope = A2AEnvelope::Presence(announcement);
@@ -152,6 +169,27 @@ impl<T: Transport> WakuA2ANode<T> {
         Metrics::inc(&self.metrics.messages_published);
         tracing::info!(name = %self.card.name, ttl_secs, "Presence announced");
         Ok(())
+    }
+
+    /// Seal the current load status for every trusted peer that has
+    /// shared an X25519 encryption pubkey. Untrusted observers see only
+    /// the count of envelopes — no payload, no peer identities.
+    fn build_sealed_status_envelopes(&self) -> Vec<SealedStatus> {
+        let status = self.current_load_status();
+        let (_, entries) = self.trust_snapshot();
+        entries
+            .iter()
+            .filter_map(|e| {
+                let pub_hex = e.encryption_pubkey.as_deref()?;
+                match SealedStatus::seal(pub_hex, &status) {
+                    Ok(env) => Some(env),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skipping sealed envelope for trust entry");
+                        None
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Poll the presence topic for new announcements and update the peer map.
@@ -178,7 +216,12 @@ impl<T: Transport> WakuA2ANode<T> {
                         );
                         continue;
                     }
-                    self.peer_map.update(&ann);
+                    let load = self.identity.as_ref().and_then(|me| {
+                        ann.sealed_status
+                            .iter()
+                            .find_map(|env| env.unseal_with(me).ok().flatten())
+                    });
+                    self.peer_map.update_with_load(&ann, load);
                     Metrics::inc(&self.metrics.peers_discovered);
                     tracing::info!(
                         name = %ann.name,
@@ -206,15 +249,15 @@ impl<T: Transport> WakuA2ANode<T> {
 
 #[cfg(test)]
 mod registry_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::registry::{AgentRegistry, InMemoryRegistry};
     use logos_messaging_a2a_core::AgentCard;
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use std::sync::Arc;
 
-    fn make_node(name: &str) -> WakuA2ANode<InMemoryTransport> {
+    fn make_node(name: &str) -> LmaoNode<InMemoryTransport> {
         let transport = InMemoryTransport::new();
-        WakuA2ANode::new(
+        LmaoNode::new(
             name,
             &format!("{} agent", name),
             vec!["test".into()],
@@ -226,8 +269,8 @@ mod registry_tests {
     async fn with_registry_builder() {
         let transport = InMemoryTransport::new();
         let registry = Arc::new(InMemoryRegistry::new());
-        let node = WakuA2ANode::new("test", "test agent", vec![], transport)
-            .with_registry(registry.clone());
+        let node =
+            LmaoNode::new("test", "test agent", vec![], transport).with_registry(registry.clone());
         assert!(node.registry.is_some());
     }
 
@@ -293,8 +336,7 @@ mod registry_tests {
         };
         registry.register(reg_card).await.unwrap();
 
-        let node =
-            WakuA2ANode::new("discoverer", "disc", vec![], transport).with_registry(registry);
+        let node = LmaoNode::new("discoverer", "disc", vec![], transport).with_registry(registry);
 
         let all = node.discover_all().await.unwrap();
         // Should find the registry agent
@@ -307,7 +349,7 @@ mod registry_tests {
         let registry = Arc::new(InMemoryRegistry::new());
 
         let node =
-            WakuA2ANode::new("self-node", "me", vec![], transport).with_registry(registry.clone());
+            LmaoNode::new("self-node", "me", vec![], transport).with_registry(registry.clone());
 
         // Register self in registry
         node.register_in_registry().await.unwrap();
@@ -328,7 +370,7 @@ mod registry_tests {
 
 #[cfg(test)]
 mod signed_presence_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, PresenceAnnouncement};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::Transport;
@@ -336,8 +378,8 @@ mod signed_presence_tests {
     fn make_node_with_transport(
         name: &str,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
-        WakuA2ANode::new(
+    ) -> LmaoNode<InMemoryTransport> {
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -377,6 +419,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         let envelope = A2AEnvelope::Presence(unsigned);
         let payload = serde_json::to_vec(&envelope).unwrap();
@@ -402,6 +445,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         ann.sign(alice.signing_key()).unwrap();
 
@@ -432,6 +476,7 @@ mod signed_presence_tests {
             waku_topic: topics::task_topic(alice.pubkey()),
             ttl_secs: 300,
             signature: None,
+            sealed_status: vec![],
         };
         ann.sign(bob.signing_key()).unwrap();
 
@@ -448,16 +493,16 @@ mod signed_presence_tests {
 
 #[cfg(test)]
 mod announce_and_discover_tests {
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement};
     use logos_messaging_a2a_transport::memory::InMemoryTransport;
     use logos_messaging_a2a_transport::sds::ChannelConfig;
     use logos_messaging_a2a_transport::Transport;
     use std::time::Duration;
 
-    fn make_node(name: &str) -> WakuA2ANode<InMemoryTransport> {
+    fn make_node(name: &str) -> LmaoNode<InMemoryTransport> {
         let transport = InMemoryTransport::new();
-        WakuA2ANode::new(
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -468,8 +513,8 @@ mod announce_and_discover_tests {
     fn make_node_with_transport(
         name: &str,
         transport: InMemoryTransport,
-    ) -> WakuA2ANode<InMemoryTransport> {
-        WakuA2ANode::new(
+    ) -> LmaoNode<InMemoryTransport> {
+        LmaoNode::new(
             name,
             &format!("{name} agent"),
             vec!["test".into()],
@@ -677,7 +722,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn announce_presence_includes_capabilities_and_topic() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["summarize".into(), "code".into()],
@@ -808,14 +853,14 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn find_peers_by_capability_integration() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["summarize".into(), "text".into()],
             transport.clone(),
         );
-        let bob = WakuA2ANode::new("bob", "bob agent", vec!["code".into()], transport.clone());
-        let observer = WakuA2ANode::new(
+        let bob = LmaoNode::new("bob", "bob agent", vec!["code".into()], transport.clone());
+        let observer = LmaoNode::new(
             "observer",
             "observer agent",
             vec!["observe".into()],
@@ -881,7 +926,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn announce_discover_roundtrip_preserves_card_fields() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "Alice the summarizer",
             vec!["summarize".into(), "text".into()],
@@ -904,13 +949,13 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn full_discovery_lifecycle() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::new(
+        let alice = LmaoNode::new(
             "alice",
             "alice agent",
             vec!["text".into()],
             transport.clone(),
         );
-        let bob = WakuA2ANode::new("bob", "bob agent", vec!["code".into()], transport.clone());
+        let bob = LmaoNode::new("bob", "bob agent", vec!["code".into()], transport.clone());
 
         // Step 1: Announce agent cards
         alice.announce().await.unwrap();
@@ -1053,7 +1098,7 @@ mod announce_and_discover_tests {
     async fn poll_presence_updates_peer_map_on_re_announce() {
         let transport = InMemoryTransport::new();
 
-        let alice = WakuA2ANode::with_config(
+        let alice = LmaoNode::with_config(
             "alice",
             "alice agent",
             vec!["text".into(), "code".into()],
@@ -1121,21 +1166,21 @@ mod announce_and_discover_tests {
     async fn find_peers_by_capability_filters_correctly() {
         let transport = InMemoryTransport::new();
 
-        let text_agent = WakuA2ANode::with_config(
+        let text_agent = LmaoNode::with_config(
             "text-agent",
             "text agent",
             vec!["text".into()],
             transport.clone(),
             fast_config(),
         );
-        let code_agent = WakuA2ANode::with_config(
+        let code_agent = LmaoNode::with_config(
             "code-agent",
             "code agent",
             vec!["code".into()],
             transport.clone(),
             fast_config(),
         );
-        let multi_agent = WakuA2ANode::with_config(
+        let multi_agent = LmaoNode::with_config(
             "multi-agent",
             "multi agent",
             vec!["text".into(), "code".into()],
@@ -1181,6 +1226,7 @@ mod announce_and_discover_tests {
             waku_topic: "/topic".into(),
             ttl_secs: 9999,
             signature: None,
+            sealed_status: vec![],
         });
         assert_eq!(node.peers().all_live().len(), 1);
     }
@@ -1188,7 +1234,7 @@ mod announce_and_discover_tests {
     #[tokio::test]
     async fn discover_and_announce_roundtrip() {
         let transport = InMemoryTransport::new();
-        let alice = WakuA2ANode::with_config(
+        let alice = LmaoNode::with_config(
             "alice",
             "alice agent",
             vec!["summarize".into()],

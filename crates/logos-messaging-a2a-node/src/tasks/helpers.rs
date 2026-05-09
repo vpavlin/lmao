@@ -3,9 +3,9 @@ use logos_messaging_a2a_crypto::AgentIdentity;
 use logos_messaging_a2a_transport::Transport;
 
 use crate::metrics::Metrics;
-use crate::{NodeError, Result, WakuA2ANode};
+use crate::{LmaoNode, NodeError, Result};
 
-impl<T: Transport> WakuA2ANode<T> {
+impl<T: Transport> LmaoNode<T> {
     /// Serialize a task into an envelope, offloading to storage if needed.
     ///
     /// When storage offload is configured and the serialized envelope exceeds
@@ -91,7 +91,7 @@ mod tests {
     use crate::tasks::test_support::{
         fast_config, FailingDownloadStorage, FailingUploadStorage, MockStorage, MockTransport,
     };
-    use crate::WakuA2ANode;
+    use crate::LmaoNode;
     use logos_messaging_a2a_core::Task;
     use std::sync::Arc;
 
@@ -103,7 +103,7 @@ mod tests {
         let published = transport.published.clone();
         let storage = Arc::new(MockStorage::new());
 
-        let node = WakuA2ANode::with_config("test", "test agent", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test agent", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(
                 storage.clone(),
                 65_536,
@@ -124,7 +124,7 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
 
         // Very low threshold to force offloading
-        let node = WakuA2ANode::with_config("test", "test agent", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test agent", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 10));
 
         let task = Task::new(
@@ -145,7 +145,7 @@ mod tests {
         let threshold = 10;
 
         // Create receiver first to capture its pubkey
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver agent",
             vec![],
@@ -162,7 +162,7 @@ mod tests {
         let _ = receiver.poll_tasks().await.unwrap();
 
         // Create sender on the same shared transport
-        let sender = WakuA2ANode::with_config(
+        let sender = LmaoNode::with_config(
             "sender",
             "sender agent",
             vec![],
@@ -192,8 +192,8 @@ mod tests {
     #[tokio::test]
     async fn test_encrypted_roundtrip_preserves_task_fields() {
         let transport = MockTransport::new();
-        let alice = WakuA2ANode::new_encrypted("alice", "Alice", vec![], transport.clone());
-        let bob = WakuA2ANode::new_encrypted("bob", "Bob", vec![], transport.clone());
+        let alice = LmaoNode::new_encrypted("alice", "Alice", vec![], transport.clone());
+        let bob = LmaoNode::new_encrypted("bob", "Bob", vec![], transport.clone());
         let bpk = bob.pubkey().to_string();
         let _ = bob.poll_tasks().await.unwrap();
 
@@ -237,14 +237,13 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
 
         // We'll measure the serialized size of a small task
-        let node =
-            WakuA2ANode::with_config("test", "test", vec![], transport.clone(), fast_config());
+        let node = LmaoNode::with_config("test", "test", vec![], transport.clone(), fast_config());
         let task = Task::new(node.pubkey(), "02aa", "x");
         let envelope = logos_messaging_a2a_core::A2AEnvelope::Task(task.clone());
         let serialized_len = serde_json::to_vec(&envelope).unwrap().len();
 
         // Set threshold to exactly the serialized length
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(
                 storage.clone(),
                 serialized_len,
@@ -263,7 +262,7 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
 
         // Set threshold very small to force offloading
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 1));
 
         let task = Task::new(node.pubkey(), "02aa", "hi");
@@ -279,7 +278,7 @@ mod tests {
         let storage = Arc::new(FailingUploadStorage);
 
         // Tiny threshold to force offload attempt
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(storage, 1));
 
         let task = Task::new(node.pubkey(), "02aa", "this will fail");
@@ -299,11 +298,11 @@ mod tests {
 
         // Sender offloads (upload succeeds)
         let sender =
-            WakuA2ANode::with_config("sender", "sender", vec![], transport.clone(), fast_config())
+            LmaoNode::with_config("sender", "sender", vec![], transport.clone(), fast_config())
                 .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 1));
 
         // Receiver has the failing-download storage
-        let receiver = WakuA2ANode::with_config(
+        let receiver = LmaoNode::with_config(
             "receiver",
             "receiver",
             vec![],
@@ -331,7 +330,7 @@ mod tests {
         let published = transport.published.clone();
 
         // Node WITHOUT storage offload
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config());
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config());
 
         let large_text = "B".repeat(100_000);
         let task = Task::new(node.pubkey(), "02aa", &large_text);
@@ -347,7 +346,7 @@ mod tests {
         let published = transport.published.clone();
         let storage = Arc::new(MockStorage::new());
 
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 1));
 
         let task = Task::new(node.pubkey(), "02aa", "offloaded content");
@@ -366,7 +365,7 @@ mod tests {
         let transport = MockTransport::new();
         let storage = Arc::new(MockStorage::new());
 
-        let node = WakuA2ANode::with_config("test", "test", vec![], transport, fast_config())
+        let node = LmaoNode::with_config("test", "test", vec![], transport, fast_config())
             .with_storage_offload(StorageOffloadConfig::with_threshold(storage.clone(), 1));
 
         for i in 0..5 {
@@ -382,7 +381,7 @@ mod tests {
     async fn with_storage_offload_builder() {
         let transport = MockTransport::new();
         let storage = Arc::new(MockStorage::new());
-        let node = WakuA2ANode::new("test", "test", vec![], transport)
+        let node = LmaoNode::new("test", "test", vec![], transport)
             .with_storage_offload(StorageOffloadConfig::new(storage));
         // Verify that storage_offload is configured
         assert!(node.storage_offload.is_some());

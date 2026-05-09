@@ -1,6 +1,49 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
+
+/// Available transport backends. Variants are gated by Cargo features so
+/// the CLI only exposes choices it can actually construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TransportKind {
+    /// Embedded Logos Messaging node via liblogosdelivery FFI.
+    #[cfg(feature = "logos-delivery")]
+    LogosDelivery,
+    /// External nwaku node over the REST API.
+    #[cfg(feature = "rest")]
+    Rest,
+}
+
+/// Optional storage backend for offloading exec audit logs (and, in
+/// future, large task payloads). When configured, agents upload the
+/// captured stderr from each `--exec` invocation and append the
+/// resulting CID to the LMAO response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum StorageKind {
+    /// No storage; exec logs are dropped.
+    #[default]
+    None,
+    /// Embedded Logos Storage (Codex) node via libstorage FFI.
+    #[cfg(feature = "libstorage")]
+    Libstorage,
+}
+
+#[cfg(not(any(feature = "logos-delivery", feature = "rest")))]
+compile_error!("at least one of `logos-delivery` or `rest` features must be enabled");
+
+impl Default for TransportKind {
+    /// Prefer logos-delivery when compiled in — it's the production path.
+    #[cfg(feature = "logos-delivery")]
+    fn default() -> Self {
+        TransportKind::LogosDelivery
+    }
+
+    /// REST fallback when logos-delivery is disabled.
+    #[cfg(all(not(feature = "logos-delivery"), feature = "rest"))]
+    fn default() -> Self {
+        TransportKind::Rest
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -8,9 +51,79 @@ use std::path::PathBuf;
     about = "A2A protocol over Waku decentralized transport"
 )]
 pub struct Cli {
-    /// nwaku REST API URL
+    /// Transport backend. `logos-delivery` (default when compiled in) embeds a
+    /// Logos Messaging node in-process via liblogosdelivery; `rest` talks to an
+    /// external nwaku node via REST.
+    #[arg(long, value_enum, global = true, default_value_t = TransportKind::default())]
+    pub transport: TransportKind,
+
+    /// nwaku REST API URL (only used when `--transport rest`).
     #[arg(long, default_value = "http://localhost:8645", global = true)]
     pub waku: String,
+
+    /// Logos Messaging network preset for the embedded node
+    /// (only used when `--transport logos-delivery`).
+    #[arg(long, default_value = "logos.dev", global = true)]
+    pub preset: String,
+
+    /// libp2p TCP listen port for the embedded node. 0 = OS-assigned.
+    /// Override when running multiple agents on the same host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub tcp_port: u16,
+
+    /// discv5 UDP port for the embedded node. 0 = OS-assigned.
+    /// Override when running multiple agents on the same host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub udp_port: u16,
+
+    /// Static peer multiaddr to dial at startup, in addition to the
+    /// preset's bootstrap list. Repeat for multiple peers. Accepts
+    /// `enrtree:`, `enr:`, or plain `/ip4/.../tcp/.../p2p/<peerId>`.
+    /// Useful when the preset's hardcoded entry-node peer-IDs are stale
+    /// (server-side rotation), or for fully local peer-to-peer setups
+    /// where the public mesh isn't needed.
+    #[arg(long = "entry-node", global = true)]
+    pub entry_nodes: Vec<String>,
+
+    /// Storage backend for the audit log of each task's exec output.
+    /// `libstorage` embeds a Logos Storage node in-process; `none`
+    /// drops the log.
+    #[arg(long, value_enum, global = true, default_value_t = StorageKind::default())]
+    pub storage: StorageKind,
+
+    /// Data directory for `--storage libstorage`. Defaults to a process-
+    /// scoped tempdir; persistent state is lost between runs.
+    #[arg(long, global = true)]
+    pub storage_data_dir: Option<PathBuf>,
+
+    /// UDP port for the embedded storage node's peer discovery.
+    /// 0 = backend default. Override when running multiple agents on
+    /// one host.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub storage_port: u16,
+
+    /// SPR (Signed Peer Record) of a peer storage node to dial at
+    /// startup, so two libstorage instances can find each other
+    /// directly without a public DHT. Repeat for multiple. Equivalent
+    /// of `--entry-node` for the storage layer. Get the value from a
+    /// running peer's `lmao storage info` output (or its startup log).
+    #[arg(long = "storage-bootstrap", global = true)]
+    pub storage_bootstrap: Vec<String>,
+
+    /// Path to the trust list TOML file. `agent run` loads it on
+    /// startup; the `lmao trust` subcommands read/write it. Defaults to
+    /// `$XDG_CONFIG_HOME/lmao/trust.toml`. A missing file is treated as
+    /// `TrustMode::Off` (no filtering — same behaviour as before the
+    /// trust list existed).
+    #[arg(long, global = true)]
+    pub trust_file: Option<PathBuf>,
+
+    /// Path to the daemon's Unix-domain socket. `agent run` binds it;
+    /// other commands probe it and forward over IPC if a daemon is
+    /// listening, otherwise spin up a short-lived node themselves.
+    /// Defaults to `$XDG_RUNTIME_DIR/lmao.sock`.
+    #[arg(long, global = true)]
+    pub daemon_socket: Option<PathBuf>,
 
     /// Path to a persistent identity keyfile (hex-encoded 32-byte signing key).
     /// If the file does not exist, a new key is generated and saved.
@@ -64,6 +177,94 @@ pub enum Commands {
     },
     /// Display agent identity and topic configuration
     Info,
+    /// Storage operations (fetch a CID from the daemon's blockstore, etc.)
+    Storage {
+        #[command(subcommand)]
+        action: StorageAction,
+    },
+    /// Manage a running daemon (the long-lived `lmao agent run` process).
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+    /// Manage the friend-keyring trust list (`docs/TRUST.md`).
+    Trust {
+        #[command(subcommand)]
+        action: TrustAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TrustAction {
+    /// List all trusted peers.
+    List,
+    /// Add (or replace) a trusted peer.
+    Add {
+        /// secp256k1 compressed-hex pubkey.
+        pubkey: String,
+        /// Human-readable nickname.
+        #[arg(long)]
+        nickname: String,
+        /// Capability to trust the peer for. Repeat the flag for
+        /// multiple. If omitted, the peer is trusted for any capability.
+        #[arg(long = "cap")]
+        capabilities: Vec<String>,
+        /// Free-form note ("met at ETHPrague 2026", etc.).
+        #[arg(long)]
+        notes: Option<String>,
+        /// Hex-encoded X25519 encryption pubkey (32 bytes / 64 hex
+        /// chars). Required for sealed presence — when set, this agent
+        /// will encrypt its load status into a per-peer envelope and
+        /// attach it to every announcement so the friend can route
+        /// around saturation. Get the value from the friend's
+        /// `lmao info` output.
+        #[arg(long)]
+        encryption_pubkey: Option<String>,
+    },
+    /// Remove a trusted peer by pubkey *or* nickname.
+    Remove {
+        /// Pubkey hex or nickname.
+        target: String,
+    },
+    /// Show or change the enforcement mode.
+    Mode {
+        /// `off`, `enforce`, or `log`. Omit to print the current mode.
+        new_mode: Option<String>,
+    },
+    /// Merge another trust file (or stdin if `-`) into the local list.
+    /// Existing pubkeys are preserved; only new ones are added.
+    Import {
+        /// Path to a TOML file. `-` reads from stdin.
+        path: String,
+    },
+    /// Print the trust list as TOML on stdout.
+    Export,
+    /// Print the secp256k1 pubkey for the configured `--keyfile` and
+    /// exit. Reads (creates if missing) the keyfile without spinning up
+    /// a transport — useful for derive-then-share workflows that don't
+    /// want to pay the cost of joining the gossip mesh.
+    Pubkey,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DaemonAction {
+    /// Show daemon identity, uptime, and configuration.
+    Status,
+    /// Ask the daemon to gracefully shut down (drains in-flight work).
+    Stop,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StorageAction {
+    /// Fetch raw bytes by CID from a running daemon's storage backend.
+    /// Requires the daemon to have been started with `--storage libstorage`.
+    Fetch {
+        /// Content ID to retrieve.
+        cid: String,
+        /// Write the bytes to this file. Defaults to stdout.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -76,6 +277,22 @@ pub enum AgentAction {
         /// Comma-separated capabilities
         #[arg(long, default_value = "text")]
         capabilities: String,
+        /// Shell command to execute for each incoming task. The task text
+        /// is written to the command's stdin. The command's stdout (after
+        /// trim) is sent back as the response. Stderr is captured as the
+        /// "audit log" (and uploaded to Logos Storage if configured).
+        ///
+        /// Default: invoke Goose against a local OpenAI-compatible endpoint
+        /// (e.g. Ollama) configured via the user's `~/.config/goose`
+        /// profile or `GOOSE_PROVIDER` / `GOOSE_MODEL` env vars.
+        ///
+        /// Use `echo` for a stub that just echoes back the task — handy
+        /// for plumbing tests without a model running.
+        #[arg(
+            long,
+            default_value = "goose run --no-session -i - --output-format text --quiet"
+        )]
+        exec: String,
     },
     /// Discover agents on the network
     Discover,
@@ -132,6 +349,28 @@ pub enum TaskAction {
         /// Delegation strategy: first-available, broadcast, round-robin
         #[arg(long)]
         strategy: Option<String>,
+    },
+    /// List recent persisted task history (newest first). Requires a
+    /// running `lmao agent run` daemon — the daemon is the source of
+    /// truth for history, not the local process.
+    History {
+        /// Maximum number of entries to return.
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        /// Skip this many newest entries before applying limit.
+        #[arg(long, default_value = "0")]
+        offset: usize,
+        /// Filter to one direction.
+        #[arg(long, value_parser = ["delegated", "received"])]
+        direction: Option<String>,
+        /// Filter to entries with exactly this capability.
+        #[arg(long)]
+        capability: Option<String>,
+    },
+    /// Show one persisted task by id.
+    Get {
+        /// Task ID (subtask uuid for delegated rows, task id for received rows).
+        task_id: String,
     },
 }
 
@@ -480,7 +719,10 @@ mod tests {
         let cli = try_parse(&["cli", "agent", "run", "--name", "echo"]).unwrap();
         match cli.command {
             Commands::Agent {
-                action: AgentAction::Run { name, capabilities },
+                action:
+                    AgentAction::Run {
+                        name, capabilities, ..
+                    },
             } => {
                 assert_eq!(name, "echo");
                 assert_eq!(capabilities, "text");

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use logos_messaging_a2a_core::PresenceAnnouncement;
+use logos_messaging_a2a_core::{LoadStatus, PresenceAnnouncement};
 
 /// Information about a live peer, derived from its presence announcement.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -24,6 +24,13 @@ pub struct PeerInfo {
     pub ttl_secs: u64,
     /// Unix timestamp (seconds) when we last saw an announcement from this peer.
     pub last_seen: u64,
+    /// Most recent load status decoded from a sealed envelope addressed
+    /// to us. `None` means either the peer didn't ship sealed status,
+    /// no envelope was addressed to us, or we don't have an X25519
+    /// identity to decrypt with. Senders use this to route around
+    /// saturated peers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load: Option<LoadStatus>,
 }
 
 impl PeerInfo {
@@ -61,6 +68,13 @@ impl PeerMap {
 
     /// Update (or insert) a peer from a presence announcement.
     pub fn update(&self, announcement: &PresenceAnnouncement) {
+        self.update_with_load(announcement, None);
+    }
+
+    /// Update with an explicit load decoded from a sealed envelope
+    /// addressed to us. The receiver-side discovery loop calls this so
+    /// the [`PeerInfo::load`] field reflects the latest sealed status.
+    pub fn update_with_load(&self, announcement: &PresenceAnnouncement, load: Option<LoadStatus>) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -72,6 +86,7 @@ impl PeerMap {
             waku_topic: announcement.waku_topic.clone(),
             ttl_secs: announcement.ttl_secs,
             last_seen: now,
+            load,
         };
 
         self.peers
@@ -153,9 +168,10 @@ mod tests {
             agent_id: agent_id.to_string(),
             name: name.to_string(),
             capabilities: caps.into_iter().map(String::from).collect(),
-            waku_topic: format!("/waku-a2a/1/task/{}/proto", agent_id),
+            waku_topic: format!("/lmao/1/task-{}/proto", agent_id),
             ttl_secs: ttl,
             signature: None,
+            sealed_status: vec![],
         }
     }
 
@@ -259,6 +275,7 @@ mod tests {
             waku_topic: "".to_string(),
             ttl_secs: 300,
             last_seen: 1000,
+            load: None,
         };
         assert!(!info.is_expired_at(1100));
         assert!(!info.is_expired_at(1300));
@@ -317,6 +334,7 @@ mod tests {
             waku_topic: "".to_string(),
             ttl_secs: 300,
             last_seen: 1000,
+            load: None,
         };
         // Exactly at TTL boundary: 1000 + 300 = 1300, elapsed = 300, not > 300
         assert!(!info.is_expired_at(1300));
@@ -332,6 +350,7 @@ mod tests {
             waku_topic: "".to_string(),
             ttl_secs: 0,
             last_seen: 1000,
+            load: None,
         };
         assert!(info.is_expired_at(1000));
         assert!(info.is_expired_at(0));
@@ -346,6 +365,7 @@ mod tests {
             waku_topic: "".to_string(),
             ttl_secs: 300,
             last_seen: 1000,
+            load: None,
         };
         // now_secs = 500 < last_seen = 1000, saturating_sub gives 0, 0 <= 300
         assert!(!info.is_expired_at(500));
@@ -436,7 +456,7 @@ mod tests {
         map.update(&ann);
 
         let info = map.get("peer1").unwrap();
-        assert_eq!(info.waku_topic, "/waku-a2a/1/task/peer1/proto");
+        assert_eq!(info.waku_topic, "/lmao/1/task-peer1/proto");
     }
 
     #[test]
@@ -480,6 +500,7 @@ mod tests {
             waku_topic: "".to_string(),
             ttl_secs: u64::MAX,
             last_seen: 0,
+            load: None,
         };
         // With max TTL, should never expire even at max time
         assert!(!info.is_expired_at(u64::MAX));
@@ -506,6 +527,7 @@ mod tests {
             waku_topic: "/topic".to_string(),
             ttl_secs: 300,
             last_seen: 1000,
+            load: None,
         };
         let b = a.clone();
         assert_eq!(a, b);

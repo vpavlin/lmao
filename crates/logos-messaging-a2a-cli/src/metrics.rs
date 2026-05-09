@@ -1,11 +1,12 @@
 use anyhow::Result;
-use logos_messaging_a2a_node::WakuA2ANode;
-use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
+use logos_messaging_a2a_node::LmaoNode;
+use logos_messaging_a2a_transport::Transport;
+use std::sync::Arc;
 
 use crate::common::IdentityConfig;
 
 pub async fn handle(
-    transport: LogosMessagingTransport,
+    transport: Arc<dyn Transport>,
     identity: &IdentityConfig,
     json: bool,
 ) -> Result<()> {
@@ -13,7 +14,7 @@ pub async fn handle(
     print_metrics(&node, json)
 }
 
-fn print_metrics(node: &WakuA2ANode<LogosMessagingTransport>, json: bool) -> Result<()> {
+fn print_metrics(node: &LmaoNode<Arc<dyn Transport>>, json: bool) -> Result<()> {
     let snap = node.metrics();
 
     if json {
@@ -36,6 +37,10 @@ fn print_metrics(node: &WakuA2ANode<LogosMessagingTransport>, json: bool) -> Res
         println!("Retry attempts:         {}", snap.retry_attempts);
         println!("Retries exhausted:      {}", snap.retries_exhausted);
         println!("Responses sent:         {}", snap.responses_sent);
+        println!(
+            "Tasks dropped (untrusted): {}",
+            snap.tasks_dropped_untrusted
+        );
     }
 
     Ok(())
@@ -65,6 +70,7 @@ mod tests {
             retry_attempts: 13,
             retries_exhausted: 14,
             responses_sent: 16,
+            tasks_dropped_untrusted: 17,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -93,10 +99,11 @@ mod tests {
             retry_attempts: 0,
             retries_exhausted: 0,
             responses_sent: 0,
+            tasks_dropped_untrusted: 0,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        // Verify all 17 fields are present
-        assert!(parsed.as_object().unwrap().len() == 17);
+        // Verify all 18 fields are present
+        assert!(parsed.as_object().unwrap().len() == 18);
     }
 }

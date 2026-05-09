@@ -126,11 +126,26 @@ impl Task {
     /// and session, swaps `from`/`to`, and attaches the given text as the
     /// agent's result message.
     pub fn respond(&self, text: &str) -> Self {
+        self.respond_with_state(text, TaskState::Completed)
+    }
+
+    /// Respond to this task with `TaskState::Failed` and the given error
+    /// text. Used by the receiver when its `--exec` returns non-zero so
+    /// the sender can render the task as failed instead of seeing a
+    /// successful response whose body happens to start with `[error]`.
+    pub fn respond_failed(&self, error_text: &str) -> Self {
+        self.respond_with_state(error_text, TaskState::Failed)
+    }
+
+    /// Build a response task with explicit state. Internal helper for
+    /// `respond` / `respond_failed` — keep the swap-from/to + uuid copy
+    /// in one place.
+    fn respond_with_state(&self, text: &str, state: TaskState) -> Self {
         Self {
             id: self.id.clone(),
             from: self.to.clone(),
             to: self.from.clone(),
-            state: TaskState::Completed,
+            state,
             message: self.message.clone(),
             result: Some(Message {
                 role: "agent".to_string(),

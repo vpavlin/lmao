@@ -31,6 +31,18 @@ const DEFAULT_POSSIBLE_ACKS_THRESHOLD: u32 = 2;
 const DEFAULT_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default max retries.
 const DEFAULT_MAX_RETRIES: u32 = 3;
+/// Hard ceiling on the incoming buffer size. When a peer sends messages
+/// whose causal-history dependencies we never satisfy, those messages
+/// would otherwise pile up here forever. Beyond this, we drop the
+/// oldest buffered message to make room.
+const INCOMING_BUFFER_MAX: usize = 256;
+/// Hard ceiling on the outgoing buffer (messages awaiting implicit ack).
+/// Same rationale as `INCOMING_BUFFER_MAX` — if remote peers never
+/// reflect our message ids in their bloom filters, we'd retain them
+/// forever.
+const OUTGOING_BUFFER_MAX: usize = 256;
+/// Hard ceiling on the per-message-id ACK-counter map.
+const POSSIBLE_ACKS_MAX: usize = 1024;
 
 /// Configuration for the SDS channel.
 #[derive(Debug, Clone)]
@@ -230,8 +242,17 @@ impl<T: Transport> MessageChannel<T> {
         self.bloom.set(&message_id);
         self.record_in_history(&message_id, ts);
 
-        // Add to outgoing buffer for potential retransmission
-        self.outgoing_buffer.lock().unwrap().push(msg.clone());
+        // Add to outgoing buffer for potential retransmission. Cap so
+        // unacked messages can't grow the buffer indefinitely (e.g.
+        // when remote peers never reflect our message ids in their
+        // bloom filters).
+        {
+            let mut out = self.outgoing_buffer.lock().unwrap();
+            if out.len() >= OUTGOING_BUFFER_MAX {
+                out.remove(0);
+            }
+            out.push(msg.clone());
+        }
 
         Ok(msg)
     }
@@ -245,7 +266,7 @@ impl<T: Transport> MessageChannel<T> {
         let message_id = compute_message_id(payload);
         let ts = self.next_timestamp();
         let causal_history = self.build_causal_history();
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
 
         let msg = ContentMessage {
             message_id: message_id.clone(),
@@ -306,7 +327,7 @@ impl<T: Transport> MessageChannel<T> {
 
     /// Send an explicit ACK for a received message.
     pub async fn send_ack(&self, _topic_prefix: &str, message_id: &str) -> Result<()> {
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
         let ack_payload = serde_json::to_vec(&serde_json::json!({
             "type": "ack",
             "message_id": message_id,
@@ -391,11 +412,16 @@ impl<T: Transport> MessageChannel<T> {
                     delivered.extend(self.resolve_buffered());
                     delivered
                 } else {
-                    // Buffer for later resolution
-                    self.incoming_buffer
-                        .lock()
-                        .unwrap()
-                        .push(SdsMessage::Content(content));
+                    // Buffer for later resolution. Cap the buffer so a
+                    // peer publishing messages with dependencies we'll
+                    // never satisfy can't grow this vec without bound.
+                    {
+                        let mut buf = self.incoming_buffer.lock().unwrap();
+                        if buf.len() >= INCOMING_BUFFER_MAX {
+                            buf.remove(0);
+                        }
+                        buf.push(SdsMessage::Content(content));
+                    }
                     // Try to resolve buffered messages
                     self.resolve_buffered()
                 }
@@ -453,6 +479,14 @@ impl<T: Transport> MessageChannel<T> {
             }
             true // keep in buffer
         });
+        // Defensive: cap the possible_acks map. Entries here are short
+        // strings, but if remote bloom filters never converge on our
+        // ids, this map could otherwise grow forever.
+        if possible_acks.len() > POSSIBLE_ACKS_MAX {
+            // Drain to shrink — losing a partial count is fine; the
+            // next remote bloom will rebuild it.
+            possible_acks.clear();
+        }
     }
 
     /// Try to deliver buffered messages whose dependencies are now satisfied.
@@ -756,7 +790,7 @@ mod tests {
         // Pre-publish an ACK
         let payload = b"hello reliable";
         let message_id = compute_message_id(payload);
-        let ack_topic = format!("/lmao/1/ack/{}/proto", message_id);
+        let ack_topic = format!("/lmao/1/ack-{}/proto", message_id);
         let ack_payload = serde_json::to_vec(&serde_json::json!({
             "type": "ack",
             "message_id": message_id,
@@ -1249,7 +1283,7 @@ mod edge_tests {
         let transport = InMemoryTransport::new();
         let ch = MessageChannel::new("ch".into(), "alice".into(), transport.clone());
 
-        let ack_topic = "/lmao/1/ack/test-msg-id/proto";
+        let ack_topic = "/lmao/1/ack-test-msg-id/proto";
         let mut rx = transport.subscribe(ack_topic).await.unwrap();
 
         ch.send_ack("/test", "test-msg-id").await.unwrap();
@@ -2210,5 +2244,43 @@ mod comprehensive_tests {
             id
         );
         assert_eq!(id.len(), 64, "SHA-256 hex is 64 chars");
+    }
+
+    #[test]
+    fn incoming_buffer_is_capped() {
+        let ch = MessageChannel::new(
+            "test-channel".to_string(),
+            "alice".to_string(),
+            InMemoryTransport::new(),
+        );
+        // Forge content messages whose causal_history points at random
+        // ids we'll never receive — every one will go straight into the
+        // buffer.
+        for i in 0..(INCOMING_BUFFER_MAX + 50) {
+            let mut hist = Vec::new();
+            hist.push(HistoryEntry {
+                message_id: format!("missing-{i}"),
+                lamport_timestamp: 0,
+                retrieval_hint: None,
+            });
+            let msg = ContentMessage {
+                message_id: format!("msg-{i}"),
+                channel_id: "test-channel".into(),
+                sender_id: "bob".into(),
+                lamport_timestamp: i as u64,
+                causal_history: hist,
+                bloom_filter: None,
+                content: vec![1, 2, 3],
+                repair_request: vec![],
+                retrieval_hint: None,
+            };
+            let raw = serde_json::to_vec(&SdsMessage::Content(msg)).unwrap();
+            let _ = ch.receive(&raw);
+        }
+        let len = ch.incoming_buffer.lock().unwrap().len();
+        assert!(
+            len <= INCOMING_BUFFER_MAX,
+            "incoming_buffer must be capped, got {len}"
+        );
     }
 }
