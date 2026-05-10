@@ -22,23 +22,37 @@ do inference itself. It does:
 - **Transport** — embedded Logos Messaging node (via `liblogosdelivery`).
   Pub/sub gossip on the `logos.dev` fleet. No nwaku container, no REST
   endpoint, no port forwarding.
-- **Discovery** — agents announce themselves with capabilities; peers
-  build a live `PeerMap` from signed presence broadcasts.
-- **Task routing** — `LmaoNode::send_task` / `delegate_task` route by
-  pubkey, capability, or strategy (first-available, capability-match,
-  round-robin, broadcast-collect).
+- **Discovery + presence** — agents broadcast a full `AgentCard` once
+  (discovery) and a recurring TTL-bounded liveness beacon (presence).
+  Peers build a live `PeerMap` from signed presence; A2A's HTTP variant
+  has no equivalent heartbeat.
+- **Sealed presence** — load-status (`free` / `busy` / `full`) rides on
+  presence beacons as per-trusted-peer X25519+ChaCha20-Poly1305 envelopes.
+  Trusted peers see your real-time capacity for load-aware routing;
+  strangers see only that you exist.
+- **Friend-keyring trust list** — runtime-mutable per-pubkey trust with
+  `Off` / `Log` / `Enforce` modes and per-capability scoping. In Enforce
+  mode, only listed peers can deliver tasks or be delegated to. See
+  [docs/TRUST.md](docs/TRUST.md).
+- **Task routing** — `LmaoNode::send_task` / `delegate_task` / `delegate_direct`
+  route by pubkey, capability, or strategy (first-available,
+  capability-match, round-robin, broadcast-collect).
 - **Audit trail** — each task's full execution log is uploaded to
   embedded Logos Storage; the response carries a `codex://<cid>` you can
   fetch later to verify what the agent actually did.
 - **Daemon mode** — `lmao agent run` is a long-running process; other
   CLI commands talk to it over a Unix socket instead of dialing the
   gossip mesh from cold every time.
+- **Basecamp UI plugin** — drop the published LGX into the official
+  Basecamp build and you get a four-tab UI (Identity / Trust / Tasks /
+  Peers) driving the same daemon, no terminal needed. See `basecamp/`.
 
-The agent itself is your business logic. Plug in [Goose](https://goose-docs.ai),
+The agent itself is your business logic. Plug in [pi](https://www.npmjs.com/package/@mariozechner/pi-coding-agent)
+(bundled in the published image as `pi-exec`), [Goose](https://goose-docs.ai),
 [Codex CLI](https://github.com/openai/codex), or any program that reads
-stdin and writes stdout. Configure it to point at your local Ollama,
-llama.cpp server, vLLM, or LM Studio — anything OpenAI-API-compatible —
-and you have a real, local, decentralized AI agent network.
+stdin and writes stdout. Point it at OpenAI / Anthropic / Venice / a local
+Ollama / lemonade-server / vLLM / LM Studio — anything OpenAI-API-compatible
+— and you have a real, local, decentralized AI agent network.
 
 | | HTTP/SSE A2A | LMAO |
 |---|---|---|
@@ -95,9 +109,24 @@ no nwaku container, no REST endpoint, no inference server inside LMAO.
 
 ## Quick Start
 
-> Goal: from a fresh checkout, `make demo` runs two agents on the real
-> `logos.dev` fleet, routes a task by capability, returns a content-
-> addressed audit log. ~45 seconds.
+Three on-ramps, in order of laziness:
+
+1. **Drop the latest LGX into your Basecamp** — go to the [v0.1.0 release](https://github.com/vpavlin/lmao/releases/tag/v0.1.0),
+   download `logos-agent-module-lib-fat.lgx` + `logos-agent_ui-module.lgx`,
+   install via Basecamp's Package Manager, restart. Done — you have a
+   live agent with a UI, no toolchain installed. (See [docs/RUNNING_REMOTE.md](docs/RUNNING_REMOTE.md)
+   if your Basecamp install rejects the LGX with a "signature error" —
+   the manual flat-extract path is documented.)
+2. **Run a headless agent in a container** — the published image
+   `ghcr.io/vpavlin/lmao:dev` ships the `lmao` binary, `liblogosdelivery.so`,
+   `pi-coding-agent`, and Goose preinstalled. `docker pull` + a small
+   compose YAML and you have an agent on the public mesh. Step-by-step:
+   [docs/RUNNING_REMOTE.md](docs/RUNNING_REMOTE.md), including the pi
+   model-config file format and `pi` extension support (e.g. the
+   `max-turns.ts` cap-extension under [demo-config/pi/agent/extensions/](demo-config/pi/agent/extensions/)).
+3. **Build from source** — keep reading. Two agents on the real
+   `logos.dev` fleet, routes a task by capability, returns a
+   content-addressed audit log, ~45 seconds end-to-end.
 
 ### Prerequisites
 
@@ -286,6 +315,62 @@ spins up its own embedded Logos Messaging node (5–20 s of mesh-join).
 With the daemon, every CLI call is a sub-millisecond Unix-socket
 round-trip against an already-connected node.
 
+## How an agent uses LMAO
+
+The agent's view of the protocol is what the `--exec` contract captures.
+Anything that can read stdin and write stdout is a valid agent — pi,
+Goose, Codex CLI, a shell script, your own binary.
+
+**Per-task contract** — for each delivered task, `lmao agent run` invokes
+your `--exec` command with:
+
+| Channel | Direction | Meaning |
+|---|---|---|
+| **stdin** | in | Plain task text (or whatever the sender packed into the `Part`) |
+| **stdout** | out | Your response — sent back over the mesh as the task result |
+| **stderr** | out | Audit-log payload — uploaded to libstorage; the CID is appended to the response as `codex://...` |
+| **exit code** | out | Zero = success → green ✓ on the requester's UI; non-zero = the task is reported failed with the last stderr line as the error |
+
+**Environment passed to your exec** — set per-invocation by the daemon:
+
+| Var | Value |
+|---|---|
+| `LMAO_SENDER_PUBKEY` | secp256k1 pubkey of the requesting agent — use it for trust-aware behaviour, audit context, etc. |
+| `LMAO_SESSION_ID` | Conversation-thread id. First-turn tasks get a freshly stamped one; "Follow up" reuses it. Map this to your inference framework's session/thread mechanism (pi `--session $LMAO_SESSION_ID`, lemonade prefix-cache key, etc.) so the model keeps state across turns instead of cold-starting every time. |
+| `PI_*` (when using `pi-exec`) | Provider/model/timeout knobs — see `scripts/pi-exec.sh` |
+
+**Receiving + responding** — happens at the protocol level without the
+agent code seeing it. Each task lands as an `A2AEnvelope` on
+`/lmao/1/task-<your-pubkey>/proto`; if it's encrypted to your X25519
+identity, the daemon decrypts before invoking exec. SDS dedup + ACKs
+happen in the transport. Your stdout response is wrapped as a `Task`
+with `state: Completed`, signed, optionally encrypted to the sender's
+intro bundle, and published back.
+
+**Becoming a delegator yourself** — an agent can be both worker and
+orchestrator. Inside your `--exec`, drive the local daemon over its
+Unix socket to fan-out subtasks:
+
+```bash
+lmao --daemon-socket "$LMAO_DAEMON_SOCKET" \
+     task delegate --capability summarize \
+     --text "$(cat)" --timeout 60
+```
+
+Same daemon, same connection, no extra mesh-joins. This is how
+multi-step pipelines and agent-as-tool patterns compose.
+
+**Optional per-agent tweaks**:
+
+- Custom system prompt (when using `pi-exec`) — set `PI_SYSTEM_PROMPT`.
+- Bound tool-call rounds — drop `demo-config/pi/agent/extensions/max-turns.ts`
+  into your pi config dir and set `PI_MAX_TURNS=N`.
+- Encryption — set `--encrypt` on `agent run`; the daemon publishes
+  your X25519 intro bundle in the AgentCard, and senders that respect
+  it will encrypt to you.
+- Trust gating — see `lmao trust mode enforce` + `lmao trust add` to
+  scope which peers can deliver tasks to you.
+
 ## CLI reference
 
 ```bash
@@ -324,6 +409,11 @@ lmao [OPTIONS] <COMMAND>
 | `presence discover [--capability c]` | Listen for raw presence broadcasts |
 | `presence peers [--capability c] [--watch]` | Show the daemon's PeerMap |
 | `storage fetch <cid> [-o file]` | Retrieve bytes by CID via the daemon |
+| `trust list` | Show the active trust list, mode, and source file |
+| `trust add <pubkey> --nickname N [--cap c …] [--notes …]` | Add or replace a trusted peer (repeat `--cap` for multiple capabilities) |
+| `trust remove <pubkey-or-nickname>` | Remove a trusted peer |
+| `trust mode <off\|log\|enforce>` | Get or set enforcement mode |
+| `trust import <file>` / `trust export <file>` | Bulk move the trust list across hosts |
 | `daemon status` / `daemon stop` | Manage a running daemon |
 | `health` | Probe the configured nwaku REST endpoint (legacy) |
 | `metrics` | Show operational metrics counters |
@@ -331,6 +421,46 @@ lmao [OPTIONS] <COMMAND>
 | `completion <shell>` | Shell completions (bash / zsh / fish / …) |
 
 ## Configuration recipes
+
+### pi against any OpenAI-compatible endpoint (recommended)
+
+`pi-coding-agent` ships in the published image as `/usr/local/bin/pi-exec`
+— a wrapper that streams the task text into pi, returns the answer on
+stdout, and packs pi's full session trace + stderr into the audit-log
+payload. Provider config is a tiny JSON pair:
+
+```jsonc
+// pi-config/agent/settings.json
+{
+  "defaultProvider": "lemonade",
+  "defaultModel": "user.Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",
+  "hideThinkingBlock": true
+}
+```
+
+```jsonc
+// pi-config/agent/models.json — never commit this; contains API keys
+{
+  "providers": {
+    "lemonade": {
+      "baseUrl": "http://host.docker.internal:8000/v1",
+      "api": "openai-completions",
+      "apiKey": "lemonade",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [{ "id": "user.Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive" }]
+    }
+  }
+}
+```
+
+```bash
+lmao agent run --name pi-analyst --capabilities analyze,review,explain,text \
+    --exec /usr/local/bin/pi-exec
+```
+
+See [docs/RUNNING_REMOTE.md](docs/RUNNING_REMOTE.md) for the full
+provider matrix (Venice, OpenRouter, Anthropic, Ollama, lemonade) and
+the optional `max-turns` extension that bounds tool-call rounds.
 
 ### Goose against Ollama
 
@@ -486,16 +616,25 @@ cargo test --workspace --features logos-delivery,libstorage   # FFI paths includ
 
 ## Status
 
-This branch (`feat/logos-delivery-transport`) is the active
-ETHPrague-prep line. Things that work today:
+`master` is the line that ships. Things that work today:
 
 - `liblogosdelivery` + `libstorage` FFIs co-exist in one binary
 - Real-network E2E for announce / discover / send / respond / presence
   / delegation / streaming / encryption
 - Daemon mode (`agent run` + IPC) for `info`, `task`, `presence`,
-  `storage fetch`
-- `--exec` integration so any stdin/stdout-shaped CLI agent (Goose,
-  Codex, gptme, plain shell scripts) becomes the worker
+  `storage fetch`, `trust *`
+- `--exec` integration: any stdin/stdout-shaped CLI agent (pi, Goose,
+  Codex, shell scripts) becomes the worker; conversation-thread state
+  is threaded through `LMAO_SESSION_ID`
+- Friend-keyring trust list (`Off` / `Log` / `Enforce` modes,
+  capability-scoped) — runtime-mutable, persists to TOML
+- Sealed presence — load-status broadcast as per-peer ChaCha20-Poly1305
+  envelopes piggybacked on presence
+- Basecamp UI plugin (agent module + agent UI) — published as both a
+  plain LGX and a fat LGX (bundled `lmao` + `liblogosdelivery.so`) on
+  every `v*` tag; CI in `.github/workflows/lgx.yml`
+- Containerised demo — `Dockerfile` + `docker-compose.yml` + published
+  `ghcr.io/vpavlin/lmao:dev` image for one-pull deploys
 
 Things that are stale:
 - The MCP bridge still uses the old transport-construction pattern;
@@ -503,7 +642,8 @@ Things that are stale:
   `logos-delivery`.
 - LEZ `ExecutionBackend` is `unimplemented!()` — only Status Network
   works for x402 payments.
-- The Logos Core / Qt plugin (`module/`) is scaffolding only.
+- Parallel delegations from the Basecamp UI lose all but the last
+  `delegate_complete` event under load — see [`docs/issues.md`](docs/issues.md).
 
 Bus-factor flag: the `storage-bindings` crate and its prebuilt native
 binaries live under personal namespace `nipsysdev/*` (Xav). Worth
@@ -521,14 +661,17 @@ mirroring before depending on it for production.
 - [x] CLI daemon mode (Unix socket IPC) for info / task / presence / storage
 - [x] `--exec` flag — any OpenAI-compatible coding agent (Goose, Codex, …)
 - [x] Presence broadcasts + PeerMap with capability indexing
-- [x] Multi-agent delegation (FirstAvailable / CapabilityMatch / RoundRobin / BroadcastCollect)
+- [x] Multi-agent delegation (FirstAvailable / CapabilityMatch / RoundRobin / BroadcastCollect / direct-by-pubkey)
 - [x] Task streaming
 - [x] x402 payment flow (Status Network EVM backend)
-- [ ] Containerised demo — Dockerfile + docker-compose for the agent fleet
+- [x] Friend-keyring trust list (Off / Log / Enforce, capability-scoped)
+- [x] Sealed presence — encrypted load-status to trusted peers
+- [x] Containerised demo — `Dockerfile` + `docker-compose.yml` + published `ghcr.io/vpavlin/lmao:dev` image
+- [x] Logos Basecamp `.lgx` plugin pair — published as portable + fat LGXs on every `v*` tag
 - [ ] MCP bridge migrated onto the daemon path
 - [ ] Logos Chat SDK — Double Ratchet for forward secrecy
 - [ ] LEZ agent registry — on-chain AgentCards via SPELbook
-- [ ] Logos Core `.lgx` plugin — agent fleet UI in the Logos desktop
+- [ ] Parallel-delegation event-loss fix in the Basecamp UI bridge
 
 ## Part of the SPEL Ecosystem
 
