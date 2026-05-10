@@ -31,6 +31,14 @@ on:
       - '.github/workflows/lgx.yml'
   workflow_dispatch:
 
+# Default GITHUB_TOKEN permissions in this repo are read-only, which is
+# fine for the build + workflow-artifact steps but blocks the
+# `gh release create / upload` calls on tag pushes with a generic
+# `HTTP 403: Resource not accessible by integration`. Grant
+# `contents: write` so the release-asset path actually works.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.module }}
