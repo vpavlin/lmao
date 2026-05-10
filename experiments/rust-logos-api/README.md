@@ -34,15 +34,29 @@ the C++ consumer pattern itself works.
 
 ```bash
 cd experiments/rust-logos-api/probe-cpp
-
-cmake -B build -G Ninja \
-    -DLOGOS_CPP_SDK_DIR="$WORKSPACE/repos/logos-cpp-sdk"
-cmake --build build
+nix build
 ```
 
-(Adjust `LOGOS_CPP_SDK_DIR` to wherever `logos-co/logos-cpp-sdk` is
-checked out. Qt6 needs to be on `CMAKE_PREFIX_PATH`; in the workspace
-that comes from the SDK's flake.)
+`flake.nix` pulls Qt6 via `logos-nix` (so we follow the workspace's
+nixpkgs / Qt pin — drift onto a different Qt and QtRO ABI mismatches
+look like flaky "registry host not reachable" runtime failures) and
+the SDK source via `logos-cpp-sdk`. Output lands at
+`./result/bin/agent_info_probe`.
+
+Iterating on `main.cpp` without paying the nix-derivation rebuild on
+each tweak:
+
+```bash
+nix develop
+cmake -B build -G Ninja      # LOGOS_CPP_SDK_DIR is preset by the shellHook
+cmake --build build
+./build/agent_info_probe     # ditto LOGOS_INSTANCE_ID env required, see Run
+```
+
+If you genuinely don't have nix, the bare CMake invocation is
+`cmake -B build -G Ninja -DLOGOS_CPP_SDK_DIR=$WORKSPACE/repos/logos-cpp-sdk`
+with Qt6 on `CMAKE_PREFIX_PATH` — but you'll have to source those
+yourself, which is exactly the friction the flake exists to remove.
 
 ### Run
 
