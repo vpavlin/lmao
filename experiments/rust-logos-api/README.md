@@ -282,6 +282,11 @@ events without polling.
 - [x] Phase A green-lights — verified with real `agent.info()` JSON over QtRO, see top of this README
 - [x] Phase B scaffolded
 - [x] Phase B green-lights — same JSON, but driven from Rust
+- [x] **`lmao-observatory` TUI** — second binary in `rust-shim/`,
+      polls `agent.{info,peers,task_history_list,trust_list}` via the
+      shim every 2–10 s, renders three tabs (Peers / Tasks / Trust) on
+      a ratatui screen. Run with `nix run .#default --` (or
+      `./result/bin/lmao-observatory` after `nix build`).
 - [ ] Event subscription extension to the shim (push events into a Rust channel)
 - [ ] Bring it into the actual `refactor/cli-as-remote-consumer`
       branch tracked in #19's roll-out

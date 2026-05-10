@@ -18,6 +18,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLoggingCategory>
 #include <QMetaObject>
 #include <QString>
 #include <QVariant>
@@ -26,6 +27,27 @@
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "logos_mode.h"
+
+namespace {
+
+// Drop Qt's debug / info logging at the message-handler level so TUI
+// callers don't get their alternate-screen rendering trashed by
+// QtRO's chatty per-call traces. Warnings + critical messages still
+// pass through. Operators who want the verbose output can set
+// `LOGOS_SHIM_VERBOSE=1` in the env.
+void quietQtMessageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+    if (type == QtDebugMsg || type == QtInfoMsg) return;
+    QByteArray utf8 = msg.toUtf8();
+    fprintf(stderr, "[%s] %s\n",
+            type == QtWarningMsg  ? "warning" :
+            type == QtCriticalMsg ? "critical" :
+            type == QtFatalMsg    ? "fatal" : "?",
+            utf8.constData());
+    if (type == QtFatalMsg) std::abort();
+    (void)ctx;
+}
+
+}  // namespace
 
 namespace {
 
@@ -108,8 +130,13 @@ LogosShim* logos_shim_new(const char* module_name) {
     const std::string mn = module_name;
 
     shim->qt_thread = std::thread([shim, mn]() {
-        // Quiet by default; the experiment's run procedure can flip
-        // QT_LOGGING_RULES if we need verbose tracing.
+        // Install the quiet message handler before any Qt class logs.
+        // Operators who want verbose tracing (debugging the bridge,
+        // not running the TUI) can opt in via env.
+        if (!std::getenv("LOGOS_SHIM_VERBOSE")) {
+            qInstallMessageHandler(quietQtMessageHandler);
+        }
+
         QCoreApplication app(g_qt_argc, g_qt_argv);
         app.setApplicationName(QStringLiteral("logos_shim"));
 
