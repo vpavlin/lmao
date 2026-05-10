@@ -49,16 +49,10 @@ fn make_node(
         trust.add(trust_entry_with_x25519(&pubkey, nick, x_pub));
     }
     Arc::new(
-        LmaoNode::from_key(
-            name,
-            name,
-            vec![capability.into()],
-            transport,
-            signing_key,
-        )
-        .with_identity(x25519)
-        .with_trust_list(trust)
-        .with_max_concurrent(max_concurrent),
+        LmaoNode::from_key(name, name, vec![capability.into()], transport, signing_key)
+            .with_identity(x25519)
+            .with_trust_list(trust)
+            .with_max_concurrent(max_concurrent),
     )
 }
 

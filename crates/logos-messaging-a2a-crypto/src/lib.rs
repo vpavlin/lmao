@@ -121,7 +121,10 @@ impl AgentIdentity {
 /// Each call generates a new ephemeral keypair, so the same plaintext
 /// encrypted to the same recipient produces different ciphertext —
 /// observers can't link envelopes by content.
-pub fn seal_for(recipient_pub: &PublicKey, plaintext: &[u8]) -> Result<([u8; 32], [u8; 12], Vec<u8>)> {
+pub fn seal_for(
+    recipient_pub: &PublicKey,
+    plaintext: &[u8],
+) -> Result<([u8; 32], [u8; 12], Vec<u8>)> {
     let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
     let ephemeral_pub = PublicKey::from(&ephemeral_secret);
     let shared = ephemeral_secret.diffie_hellman(recipient_pub);

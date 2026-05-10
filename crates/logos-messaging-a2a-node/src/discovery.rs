@@ -1,6 +1,8 @@
 //! Discovery, presence, and registry operations for [`LmaoNode`].
 
-use logos_messaging_a2a_core::{topics, A2AEnvelope, AgentCard, PresenceAnnouncement, SealedStatus};
+use logos_messaging_a2a_core::{
+    topics, A2AEnvelope, AgentCard, PresenceAnnouncement, SealedStatus,
+};
 use logos_messaging_a2a_transport::Transport;
 use std::collections::HashMap;
 

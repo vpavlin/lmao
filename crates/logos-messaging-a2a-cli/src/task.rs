@@ -158,7 +158,10 @@ fn print_daemon_response(resp: Response, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Response::TaskHistoryList { entries, history_path } => {
+        Response::TaskHistoryList {
+            entries,
+            history_path,
+        } => {
             if json {
                 println!(
                     "{}",
@@ -197,7 +200,11 @@ fn print_daemon_response(resp: Response, json: bool) -> Result<()> {
                 println!(
                     "{ts} [{status}] {dir} {peer}  cap={cap}  {ms}ms",
                     ts = format_unix_ms(e.created_at_ms),
-                    cap = if e.capability.is_empty() { "-" } else { &e.capability },
+                    cap = if e.capability.is_empty() {
+                        "-"
+                    } else {
+                        &e.capability
+                    },
                     ms = e.elapsed_ms,
                 );
                 let preview: String = e.text.chars().take(80).collect();

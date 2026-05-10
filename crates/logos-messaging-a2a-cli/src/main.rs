@@ -40,7 +40,11 @@ async fn main() -> Result<()> {
     unsafe {
         // PR_SET_PDEATHSIG = 1, SIGTERM = 15. Posix const not in libc
         // crate's stable surface, hard-coded values are fine here.
-        libc::prctl(1 /* PR_SET_PDEATHSIG */, 15 /* SIGTERM */, 0, 0, 0);
+        libc::prctl(
+            1,  /* PR_SET_PDEATHSIG */
+            15, /* SIGTERM */
+            0, 0, 0,
+        );
     }
 
     let cli = Cli::parse();
@@ -196,13 +200,9 @@ pub(crate) async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBac
             } else {
                 Some(cli.storage_port)
             };
-            let backend = LibstorageBackend::with_config(
-                &data_dir,
-                port,
-                None,
-                &cli.storage_bootstrap,
-            )
-            .await?;
+            let backend =
+                LibstorageBackend::with_config(&data_dir, port, None, &cli.storage_bootstrap)
+                    .await?;
             // Surface our own SPR so a peer can dial us. Best-effort —
             // a startup hiccup shouldn't break agent_run.
             if let Ok(spr) = backend.spr().await {

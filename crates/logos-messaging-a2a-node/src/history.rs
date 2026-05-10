@@ -266,11 +266,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let h = History::open(dir.path().join("h.jsonl"));
         for i in 0..5 {
-            h.append(&entry(&format!("t{i}"), "delegated", i)).await.unwrap();
+            h.append(&entry(&format!("t{i}"), "delegated", i))
+                .await
+                .unwrap();
         }
         let out = h.list(2, 1, &HistoryFilter::default()).await.unwrap();
         // newest first: t4, t3, t2, t1, t0 — skip 1 → t3, take 2 → t3, t2
-        assert_eq!(out.iter().map(|e| e.task_id.as_str()).collect::<Vec<_>>(), vec!["t3", "t2"]);
+        assert_eq!(
+            out.iter().map(|e| e.task_id.as_str()).collect::<Vec<_>>(),
+            vec!["t3", "t2"]
+        );
     }
 
     #[tokio::test]

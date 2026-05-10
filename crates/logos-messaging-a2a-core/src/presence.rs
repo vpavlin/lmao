@@ -127,7 +127,10 @@ impl SealedStatus {
     /// Seal a [`LoadStatus`] for a single recipient identified by their
     /// hex-encoded X25519 public key. Generates a fresh ephemeral
     /// keypair so each broadcast unlinks from prior ones.
-    pub fn seal(recipient_x25519_pub_hex: &str, status: &LoadStatus) -> Result<Self, PresenceError> {
+    pub fn seal(
+        recipient_x25519_pub_hex: &str,
+        status: &LoadStatus,
+    ) -> Result<Self, PresenceError> {
         let recipient_pub = AgentIdentity::parse_public_key(recipient_x25519_pub_hex)
             .map_err(|e| PresenceError::InvalidRecipientPubkey(e.to_string()))?;
         let recipient_bytes = *recipient_pub.as_bytes();
@@ -298,7 +301,8 @@ mod tests {
             capabilities: vec![],
             waku_topic: "/test/proto".to_string(),
             ttl_secs: 60,
-            sealed_status: vec![], signature: Some(vec![1, 2, 3, 4]),
+            sealed_status: vec![],
+            signature: Some(vec![1, 2, 3, 4]),
         };
         let json = serde_json::to_string(&ann).unwrap();
         assert!(json.contains("signature"));
@@ -465,7 +469,8 @@ mod tests {
             capabilities: vec![],
             waku_topic: "/t".to_string(),
             ttl_secs: 60,
-            sealed_status: vec![], signature: Some(vec![1, 2, 3]),
+            sealed_status: vec![],
+            signature: Some(vec![1, 2, 3]),
         };
         let err = ann.verify().unwrap_err();
         assert!(err.to_string().contains("not valid hex"));
@@ -480,7 +485,8 @@ mod tests {
             capabilities: vec![],
             waku_topic: "/t".to_string(),
             ttl_secs: 60,
-            sealed_status: vec![], signature: Some(vec![1, 2, 3]),
+            sealed_status: vec![],
+            signature: Some(vec![1, 2, 3]),
         };
         let err = ann.verify().unwrap_err();
         assert!(err.to_string().contains("not a valid secp256k1"));
@@ -762,7 +768,8 @@ mod tests {
             capabilities: vec!["a".to_string()],
             waku_topic: "/t".to_string(),
             ttl_secs: 60,
-            sealed_status: vec![], signature: Some(vec![1, 2, 3]), // signature should not affect canonical bytes
+            sealed_status: vec![],
+            signature: Some(vec![1, 2, 3]), // signature should not affect canonical bytes
         };
         assert_eq!(ann1.canonical_bytes(), ann2.canonical_bytes());
     }

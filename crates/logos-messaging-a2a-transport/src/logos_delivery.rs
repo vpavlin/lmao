@@ -7,10 +7,10 @@
 //!
 //! The FFI is callback-based; this module bridges to async Rust two ways:
 //!
-//! - **Per-call callbacks** ([`call_trampoline`]) — one-shot futures that
+//! - **Per-call callbacks** (`call_trampoline`) — one-shot futures that
 //!   resolve when the lib reports completion of `create_node` / `start_node`
 //!   / `subscribe` / `send` / etc.
-//! - **Event callback** ([`event_trampoline`]) — single hot callback
+//! - **Event callback** (`event_trampoline`) — single hot callback
 //!   registered for the lifetime of the node; dispatches `message_received`
 //!   events into per-content-topic [`mpsc::Sender`]s.
 //!
