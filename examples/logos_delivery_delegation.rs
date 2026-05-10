@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
             capability: "code".into(),
         },
         timeout_secs: DELEGATION_TIMEOUT_SECS,
+        session_id: None,
     };
     let result = orchestrator.delegate_task(&request).await?;
     eprintln!(

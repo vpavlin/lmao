@@ -299,7 +299,7 @@ async fn delegate_errors_when_no_trusted_peer_advertises_capability() {
         waku_topic: format!("/lmao/1/task-{}/proto", charlie.pubkey()),
         ttl_secs: 60,
         signature: None,
-            sealed_status: vec![],
+        sealed_status: vec![],
     });
 
     let req = DelegationRequest {

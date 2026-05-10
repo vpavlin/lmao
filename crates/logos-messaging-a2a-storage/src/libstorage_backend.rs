@@ -151,7 +151,7 @@ mod tests {
     async fn make_backend() -> (LibstorageBackend, tempfile::TempDir) {
         let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let backend = LibstorageBackend::with_config(tmp.path(), Some(port), None)
+        let backend = LibstorageBackend::with_config(tmp.path(), Some(port), None, &[])
             .await
             .expect("failed to create LibstorageBackend");
         (backend, tmp)

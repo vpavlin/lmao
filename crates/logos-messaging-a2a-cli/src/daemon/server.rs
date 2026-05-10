@@ -134,10 +134,7 @@ impl DaemonServer {
                 uptime_secs: self.started_at.elapsed().as_secs(),
                 socket_path: self.socket_path.clone(),
                 storage_enabled: self.storage.is_some(),
-                encryption_pubkey: self
-                    .node
-                    .identity()
-                    .map(|id| id.public_key_hex()),
+                encryption_pubkey: self.node.identity().map(|id| id.public_key_hex()),
                 load: Some((&self.node.current_load_status()).into()),
             }),
             Request::Discover => {
@@ -236,10 +233,9 @@ impl DaemonServer {
                 let results = if let Some(ref pk) = to {
                     if broadcast {
                         return Ok(Response::Error {
-                            message:
-                                "--broadcast cannot be combined with --to (direct delegation \
+                            message: "--broadcast cannot be combined with --to (direct delegation \
                                  targets a single peer)"
-                                    .into(),
+                                .into(),
                         });
                     }
                     vec![self.node.delegate_direct(&request, pk).await?]

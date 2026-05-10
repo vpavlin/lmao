@@ -23,7 +23,7 @@ struct ExecOutput {
 /// The command runs through `sh -c` so quoting and pipes work the way the
 /// user wrote them. stdout becomes the agent's response; stderr is kept
 /// as the audit-log payload. A non-zero exit is surfaced as an error so
-/// the caller can decide whether to respond with a graceful "[error]"
+/// the caller can decide whether to respond with a graceful `[error]`
 /// message or skip the task entirely.
 async fn run_exec(
     cmd: &str,
@@ -137,6 +137,11 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// effectively dropped on the floor.
 const STARTUP_GOSSIP_WAIT: Duration = Duration::from_secs(3);
 
+// One entry-point that wires daemon socket, identity, transport, storage,
+// trust file, history dir, and CLI flags. Could be a builder, but the
+// call site is a single match arm — splitting just to satisfy clippy
+// pushes the same args into a struct without adding clarity.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle(
     action: AgentAction,
     transport: Arc<dyn Transport>,
@@ -175,9 +180,10 @@ pub async fn handle(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1)
                 .max(1);
-            let mut builder = build_node(&name, &format!("{} agent", name), caps, transport, identity)?
-                .with_trust_list(trust_list)
-                .with_max_concurrent(max_concurrent);
+            let mut builder =
+                build_node(&name, &format!("{} agent", name), caps, transport, identity)?
+                    .with_trust_list(trust_list)
+                    .with_max_concurrent(max_concurrent);
             if let Some(h) = history {
                 builder = builder.with_history(h);
             }
@@ -224,10 +230,7 @@ pub async fn handle(
                 // and operators have been bitten by stale lists from a
                 // previous demo carrying over into a fresh run.
                 if !trust_file_explicit
-                    && matches!(
-                        trust_mode,
-                        logos_messaging_a2a_core::TrustMode::Enforce
-                    )
+                    && matches!(trust_mode, logos_messaging_a2a_core::TrustMode::Enforce)
                     && trust_count > 0
                 {
                     eprintln!(
@@ -316,13 +319,11 @@ pub async fn handle(
             let mut tick: u32 = 0;
             loop {
                 tick = tick.wrapping_add(1);
-                if tick % EVICT_EVERY_TICKS == 0 {
+                if tick.is_multiple_of(EVICT_EVERY_TICKS) {
                     let evicted_peers = node.peers().evict_expired();
                     let evicted_sessions = node.evict_idle_sessions(SESSION_IDLE_MAX_SECS);
                     if evicted_peers + evicted_sessions > 0 {
-                        eprintln!(
-                            "[evict] peers={evicted_peers} sessions={evicted_sessions}"
-                        );
+                        eprintln!("[evict] peers={evicted_peers} sessions={evicted_sessions}");
                     }
                 }
                 let _ = node.poll_presence().await;
@@ -455,8 +456,11 @@ pub async fn handle(
                                         } else {
                                             response.clone()
                                         };
-                                        println!("  Responded ({}): {}",
-                                            if failed { "failed" } else { "ok" }, preview);
+                                        println!(
+                                            "  Responded ({}): {}",
+                                            if failed { "failed" } else { "ok" },
+                                            preview
+                                        );
                                     }
                                 }
                             }

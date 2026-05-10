@@ -163,7 +163,8 @@ impl<T: Transport> LmaoNode<T> {
             )));
         }
         Metrics::inc(&self.metrics.delegations_sent);
-        self.delegate_to_peer(request, peer_pubkey, timeout_secs).await
+        self.delegate_to_peer(request, peer_pubkey, timeout_secs)
+            .await
     }
 
     /// Delegate a subtask to all matching peers and collect responses.

@@ -39,7 +39,8 @@ impl<T: Transport> LmaoNode<T> {
         result_text: &str,
         sender_card: Option<&AgentCard>,
     ) -> Result<()> {
-        self.publish_response(task, result_text, sender_card, false).await
+        self.publish_response(task, result_text, sender_card, false)
+            .await
     }
 
     /// Internal — build the response task (Completed or Failed),

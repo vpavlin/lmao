@@ -582,8 +582,9 @@ impl<T: Transport> LmaoNode<T> {
         self.in_flight.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Build the [`LoadStatus`] this agent advertises right now.
-    /// Inspected when sealing presence envelopes for trusted peers.
+    /// Build the [`logos_messaging_a2a_core::LoadStatus`] this agent
+    /// advertises right now. Inspected when sealing presence envelopes
+    /// for trusted peers.
     pub fn current_load_status(&self) -> logos_messaging_a2a_core::LoadStatus {
         let queue_depth = self.in_flight_count() as u32;
         logos_messaging_a2a_core::LoadStatus {
@@ -598,7 +599,7 @@ impl<T: Transport> LmaoNode<T> {
     }
 
     /// Whether this agent is at or above its advertised concurrency
-    /// ceiling. Receivers use this in [`tasks::respond`] to immediately
+    /// ceiling. Receivers use this in `tasks::respond` to immediately
     /// reject incoming tasks instead of letting them queue silently.
     pub fn is_at_capacity(&self) -> bool {
         (self.in_flight_count() as u32) >= self.max_concurrent

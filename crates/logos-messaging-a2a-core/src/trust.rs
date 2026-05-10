@@ -21,12 +21,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Trust enforcement mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustMode {
     /// No filtering — every sender is trusted, every peer is a delegation
     /// candidate. Default for legacy / unconfigured nodes so behaviour is
     /// unchanged when no trust file exists.
+    #[default]
     Off,
     /// Drop untrusted senders silently; only consider trusted peers for
     /// delegation. The "I know what I'm doing" mode.
@@ -35,12 +36,6 @@ pub enum TrustMode {
     /// up the trust list — you can see who's trying to talk to you and
     /// decide whether to add them.
     Log,
-}
-
-impl Default for TrustMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 /// One trusted peer.
