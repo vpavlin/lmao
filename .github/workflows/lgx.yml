@@ -1,0 +1,159 @@
+name: LGX
+
+# Publishes LGX outputs of basecamp/agent-module and basecamp/agent-ui:
+#
+# - **portable LGX** (every module): the plain `nix build .#lgx-portable`
+#   output — plugin .so + manifest. Drops cleanly into a nix-aware
+#   Basecamp checkout. Doesn't include bundled binaries.
+#
+# - **fat LGX** (agent-module only): the same plugin plus a bundled
+#   `lmao` binary and `liblogosdelivery.so`, produced by
+#   `scripts/build-fat-lgx.sh`. Installs into the official Basecamp
+#   AppImage with no further wiring; the agent module finds the
+#   bundled lmao via dladdr (basecamp/agent-module/src/agent_impl.cpp)
+#   and the daemon picks up `liblogosdelivery.so` from the plugin dir
+#   via auto-prepended LD_LIBRARY_PATH.
+#
+# Trigger paths:
+# - push to master / PRs touching basecamp/ — uploaded as workflow
+#   artifacts (90-day retention).
+# - `v*` tags — also attached to the GitHub release for that tag as
+#   public, persistent download URLs.
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'basecamp/**'
+      - 'scripts/build-fat-lgx.sh'
+      - '.github/workflows/lgx.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [agent-module, agent-ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # ── Plain portable LGX (both modules) ─────────────────────────
+      - name: Build portable LGX
+        working-directory: basecamp/${{ matrix.module }}
+        run: nix build .#lgx-portable -o result-portable -L
+
+      - name: Stage portable artifact
+        id: stage_portable
+        working-directory: basecamp/${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          src=$(ls result-portable/*.lgx | head -n1)
+          if [[ -z "$src" ]]; then
+            echo "no .lgx file found under result-portable/" >&2
+            exit 1
+          fi
+          mkdir -p ../../staging
+          # Copy (don't symlink) so upload-artifact can read through
+          # the nix-store readonly path.
+          cp -L "$src" "../../staging/$(basename "$src")"
+          echo "name=$(basename "$src")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload portable LGX
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.module }}-portable-lgx
+          path: staging/${{ steps.stage_portable.outputs.name }}
+          retention-days: 90
+          if-no-files-found: error
+
+      # ── Fat LGX (agent-module only) ──────────────────────────────
+      # The agent-ui plugin is QML-only; nothing to bundle. Skip.
+      - name: Extract lmao + liblogosdelivery from published image
+        if: matrix.module == 'agent-module'
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/vpavlin/lmao:dev
+          cid=$(docker create ghcr.io/vpavlin/lmao:dev)
+          mkdir -p "$RUNNER_TEMP/bundled"
+          docker cp "$cid:/usr/local/bin/lmao"                 "$RUNNER_TEMP/bundled/lmao"
+          docker cp "$cid:/usr/local/lib/liblogosdelivery.so"  "$RUNNER_TEMP/bundled/liblogosdelivery.so"
+          docker rm "$cid"
+          chmod +x "$RUNNER_TEMP/bundled/lmao"
+
+      - name: Build lgx CLI
+        if: matrix.module == 'agent-module'
+        run: |
+          set -euo pipefail
+          # `lgx add` recomputes manifest hashes after we inject extra
+          # files; without that the official Basecamp verifier rejects
+          # the LGX with a generic "signature error".
+          nix build github:logos-co/logos-package#lgx -o "$RUNNER_TEMP/lgx-cli" -L
+
+      - name: Build fat LGX
+        if: matrix.module == 'agent-module'
+        env:
+          LMAO_BIN_PATH:         ${{ runner.temp }}/bundled/lmao
+          LIBLOGOSDELIVERY_PATH: ${{ runner.temp }}/bundled/liblogosdelivery.so
+          LGX_BIN:               ${{ runner.temp }}/lgx-cli/bin/lgx
+        run: ./scripts/build-fat-lgx.sh
+
+      - name: Stage fat artifact
+        if: matrix.module == 'agent-module'
+        id: stage_fat
+        working-directory: basecamp/agent-module
+        run: |
+          set -euo pipefail
+          src=$(ls result-fat/*.lgx | head -n1)
+          if [[ -z "$src" ]]; then
+            echo "no .lgx file found under result-fat/" >&2
+            exit 1
+          fi
+          # Distinct filename from the plain LGX so both can coexist
+          # on a release. e.g. logos-agent-module-lib-fat.lgx.
+          base=$(basename "$src" .lgx)
+          mkdir -p ../../staging
+          cp -L "$src" "../../staging/${base}-fat.lgx"
+          echo "name=${base}-fat.lgx" >> "$GITHUB_OUTPUT"
+
+      - name: Upload fat LGX
+        if: matrix.module == 'agent-module'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-module-fat-lgx
+          path: staging/${{ steps.stage_fat.outputs.name }}
+          retention-days: 90
+          if-no-files-found: error
+
+      # ── Release upload (tag pushes only) ─────────────────────────
+      - name: Attach LGXs to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # Create the release if it doesn't exist yet. First matrix
+          # entry to run on a fresh tag wins; the `view` short-circuit
+          # avoids the "already exists" error on subsequent jobs.
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --generate-notes --title "$tag"
+          # Plain LGX (always present)
+          gh release upload --clobber "$tag" \
+            "staging/${{ steps.stage_portable.outputs.name }}"
+          # Fat LGX (only the agent-module job has this set)
+          if [[ -n "${{ steps.stage_fat.outputs.name }}" ]]; then
+            gh release upload --clobber "$tag" \
+              "staging/${{ steps.stage_fat.outputs.name }}"
+          fi
