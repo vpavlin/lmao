@@ -70,11 +70,16 @@ void runProbe(int& exitCode) {
         return;
     }
 
-    // Synchronous call. `Timeout` is the SDK's typed timeout wrapper so
-    // it doesn't ambiguously match a QVariant arg.
+    // Synchronous call. The 0-arg overload is
+    //     invokeRemoteMethod(objectName, methodName, args, timeout)
+    // with `args` defaulting to an empty QVariantList; we have to pass
+    // it explicitly to disambiguate from the (varargs ... Timeout) form.
+    // `Timeout` is the SDK's typed wrapper so it doesn't accidentally
+    // collapse into a positional QVariant argument.
     const QVariant raw = client->invokeRemoteMethod(
         QStringLiteral("agent"),
         QStringLiteral("info"),
+        QVariantList(),
         Timeout(CALL_TIMEOUT_MS));
 
     if (!raw.isValid()) {

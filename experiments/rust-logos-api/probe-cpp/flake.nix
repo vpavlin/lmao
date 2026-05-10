@@ -33,8 +33,14 @@
           version = "0.0.1";
           src = ./.;
 
-          nativeBuildInputs = with pkgs; [ cmake ninja qt6.wrapQtAppsHook ];
-          buildInputs = with pkgs.qt6; [ qtbase qtremoteobjects ];
+          nativeBuildInputs = with pkgs; [ cmake ninja qt6.wrapQtAppsHook pkg-config ];
+          buildInputs = with pkgs;
+            (with pkgs.qt6; [ qtbase qtremoteobjects ])
+            # Transitive deps of the SDK's `logos_sdk` static target —
+            # Boost.System (asio's error_code), OpenSSL, nlohmann_json.
+            # Without these the SDK's own CMakeLists fails at
+            # find_package time before we even reach our target.
+            ++ [ boost openssl nlohmann_json ];
 
           cmakeFlags = [
             "-DLOGOS_CPP_SDK_DIR=${sdkSrc}"
@@ -66,8 +72,9 @@
         # nix derivation each time. LOGOS_CPP_SDK_DIR is preset so a
         # plain `cmake -B build && cmake --build build` works.
         default = pkgs.mkShell {
-          packages = with pkgs; [ cmake ninja ]
-            ++ (with pkgs.qt6; [ qtbase qtremoteobjects ]);
+          packages = with pkgs; [ cmake ninja pkg-config ]
+            ++ (with pkgs.qt6; [ qtbase qtremoteobjects ])
+            ++ [ boost openssl nlohmann_json ];
           shellHook = ''
             export LOGOS_CPP_SDK_DIR=${sdkSrc}
           '';

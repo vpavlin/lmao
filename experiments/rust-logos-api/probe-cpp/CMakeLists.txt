@@ -24,16 +24,14 @@ if(NOT LOGOS_CPP_SDK_DIR)
         "<workspace>/repos/logos-cpp-sdk.")
 endif()
 
-add_executable(agent_info_probe
-    main.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/logos_api.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/logos_api_client.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/logos_api_provider.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/logos_provider_object.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/logos_registry_factory.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/implementations/qt_remote/qt_remote_registry.cpp
-    ${LOGOS_CPP_SDK_DIR}/cpp/implementations/qt_remote/remote_transport.cpp
-)
+# Consume the SDK as a CMake subproject — its own CMakeLists.txt
+# defines an `add_library(logos_sdk STATIC ...)` target that links Qt,
+# Boost, OpenSSL, nlohmann_json correctly. Cherry-picking the .cpp
+# files we *think* we need risks linker drift every time the SDK
+# grows a new translation unit.
+add_subdirectory(${LOGOS_CPP_SDK_DIR}/cpp ${CMAKE_BINARY_DIR}/_logos_sdk EXCLUDE_FROM_ALL)
+
+add_executable(agent_info_probe main.cpp)
 
 target_include_directories(agent_info_probe PRIVATE
     ${LOGOS_CPP_SDK_DIR}/cpp
@@ -42,10 +40,10 @@ target_include_directories(agent_info_probe PRIVATE
 )
 
 target_link_libraries(agent_info_probe PRIVATE
+    logos_sdk
     Qt6::Core
     Qt6::RemoteObjects
 )
 
-# If the SDK build flips on rep-file generation, we'd add it here. The
-# probe doesn't define any new replicas — it only consumes an existing
-# one (`agent`) — so we shouldn't need REPC.
+# We don't define any new replicas — the probe only consumes an
+# existing one (`agent`) — so REPC is not needed.

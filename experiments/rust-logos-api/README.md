@@ -97,7 +97,18 @@ pipe `./build/agent_info_probe | jq .`.)
 | Prints valid JSON ✓ | Remote-mode QtRO consumer works from a non-host process. The bindings story for Rust is a mechanical wrap. | Move to Phase B. Open the messaging-migration PR with confidence. |
 | `getClient` returns null | QtRO registry not reachable. | Check `LOGOS_INSTANCE_ID` matches in both shells; check logoscore's stderr for "Registry host created at:". |
 | `invokeRemoteMethod` returns invalid `QVariant` | Method dispatch failed. | Confirm `agent` module is in the load list logoscore reported. Confirm the method exists in the module's `getMethods()` (it should after PR #15 + the API freeze in #20). |
+| **Hangs past the `Timeout(10_000)` arg** | This is what happens when no logoscore is running at all. QtRO opens the `QLocalSocket` to the registry name, gets `ServerNotFoundError`, starts a reconnect timer, and the SDK's pre-call token handshake (`capability_module.requestModule("agent")`) blocks waiting for the registry — *the `Timeout` arg is the per-call deadline, not a connect-deadline*. Phase B's Rust shim will need an outer caller-side timeout on top, or a separate "is the registry reachable" probe before issuing real calls. | Flagged. Document in the shim. |
 | Compile fails before we get here | SDK / Qt mismatch on the host. | Surface the specific error; we'd need to revisit the SDK-as-CMake-package story before going further. |
+
+### What the spike has confirmed so far
+
+- `nix build` against `logos-cpp-sdk` + the workspace Qt pin works on linux-x86_64. ~3 min cold (compiles the whole SDK static lib), seconds incremental.
+- The right way to consume the SDK is `add_subdirectory(${LOGOS_CPP_SDK_DIR}/cpp)` — its CMakeLists already exports a `logos_sdk` STATIC target with Qt + Boost + OpenSSL + nlohmann_json wired up. Cherry-picking individual `.cpp`s drifts on every SDK update.
+- `LogosAPI` ctor + `getClient(...)` are non-blocking; the actual connect-and-handshake happens inside `invokeRemoteMethod` and isn't gated by the `Timeout` arg's value when there's no registry at all.
+
+### What's still open
+
+- The success path. The probe builds and runs; what it does against a *real* logoscore + agent module is the actually-interesting half. Easiest reproduction: run it from a Basecamp checkout where all four modules are already loaded (`-m ~/.local/share/Logos/LogosBasecamp/modules`). Until that's been demonstrated, we know the bindings + build story works but not the dispatch path.
 
 ---
 
