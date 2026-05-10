@@ -221,10 +221,67 @@ mechanical.
 
 ---
 
+## Phase B — Rust shim ✓ green
+
+`rust-shim/` ships the same `agent.info()` round-trip but driven from
+Rust:
+
+- `src/main.rs` — Rust binary equivalent of `probe-cpp/main.cpp`.
+- `src/lib.rs` — safe `Shim` wrapper over the unsafe FFI.
+- `shim/shim.{h,cpp}` — C-callable layer over `LogosAPI`. Owns a Qt
+  event-loop thread; serialises calls onto it via
+  `QMetaObject::invokeMethod(Qt::QueuedConnection)`. JSON in, JSON
+  out — Rust never sees a Qt type.
+- `build.rs` — drives `cmake-rs` to build the shim + the SDK's
+  `logos_sdk` static target, then `bindgen` over `shim.h`.
+- `flake.nix` — wraps cargo + cmake + Qt6 + Boost / OpenSSL /
+  nlohmann_json + bindgen's libclang. `nix build` produces
+  `result/bin/agent_info_probe_rs`.
+
+Verified end-to-end on linux-x86_64, 2026-05-10. With logoscore +
+agent + capability_module loaded, `result/bin/agent_info_probe_rs`
+prints:
+
+```json
+{
+  "kind": "info",
+  "name": "basecamp",
+  "pubkey": "036174d7bda3afefbecef527548c00da49773543c350fc231d192d8fea6c5f40d7",
+  "capabilities": ["text"],
+  "encryption_pubkey": "cd9de6e0d7bba572d050342562c3061be97e77ea3e7d912eff3dd2a29b100f1b",
+  "storage_enabled": true,
+  "load": {"bucket":"free","queue_depth":0,"max_concurrent":1,"avg_latency_ms":0},
+  ...
+}
+```
+
+Two gotchas captured along the way:
+
+- `buildRustPackage`'s default cmake / ninja setupHooks step on
+  cmake-rs's own pipeline. Set
+  `dontUseCmakeConfigure = true`, `dontUseCmakeBuild = true`,
+  `dontUseNinjaBuild = true`, `dontUseNinjaInstall = true` so the
+  Rust build owns the build pipeline.
+- The shim's CMakeLists must `install(TARGETS logos_sdk ARCHIVE
+  DESTINATION lib)` alongside `logos_shim` — cmake-rs only exposes
+  the install prefix to `build.rs`, not the build dir. Without an
+  install rule for the SDK target, rustc's linker can't find
+  `liblogos_sdk.a`.
+
+What the shim doesn't do yet: event subscriptions. `LogosAPI` exposes
+`onModuleEvent(...)` for receiving `delegate_complete` /
+`fetch_cid_complete` / etc. events; the C-callable shim is sync-only
+for now. Adding a `logos_shim_subscribe(name, callback)` that pushes
+events into a Rust mpsc channel is the obvious next extension —
+needed for the observatory TUI to surface live task / presence
+events without polling.
+
 ## Status
 
 - [x] Phase A scaffolded
 - [x] Phase A green-lights — verified with real `agent.info()` JSON over QtRO, see top of this README
-- [ ] Phase B scaffolded — Rust crate + cmake-rs + bindgen over a `shim.h`
-- [ ] Phase B green-lights → open the actual `refactor/cli-as-remote-consumer`
+- [x] Phase B scaffolded
+- [x] Phase B green-lights — same JSON, but driven from Rust
+- [ ] Event subscription extension to the shim (push events into a Rust channel)
+- [ ] Bring it into the actual `refactor/cli-as-remote-consumer`
       branch tracked in #19's roll-out
