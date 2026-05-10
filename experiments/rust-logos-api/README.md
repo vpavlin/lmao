@@ -20,6 +20,31 @@ the C++ consumer pattern itself works.
 
 ---
 
+## Status: Phase A is green
+
+End-to-end success on linux-x86_64, 2026-05-10:
+
+```json
+{
+  "kind": "info",
+  "name": "basecamp",
+  "pubkey": "036174d7bda3afefbecef527548c00da49773543c350fc231d192d8fea6c5f40d7",
+  "capabilities": ["text"],
+  "uptime_secs": 38,
+  "storage_enabled": true,
+  "encryption_pubkey": "cd9de6e0d7bba572d050342562c3061be97e77ea3e7d912eff3dd2a29b100f1b",
+  "load": {"bucket": "free", "queue_depth": 0, "max_concurrent": 1, "avg_latency_ms": 0}
+}
+```
+
+The probe ran in a non-host process, talked to a separately-launched
+`logoscore --mode 0`, dispatched through QtRO into the agent module's
+`info()` Q_INVOKABLE, got JSON back. Bindings story for Phase B is
+unblocked.
+
+The exact reproduction (modules-dir setup + the manifest.json gotcha
+for `capability_module`) is in the Run section below.
+
 ## Phase A — pure C++ probe
 
 `probe-cpp/main.cpp` is a single-file binary. It:
@@ -60,35 +85,75 @@ yourself, which is exactly the friction the flake exists to remove.
 
 ### Run
 
-In one terminal — start a Remote-mode `logoscore` with the agent
-module loaded:
+The exact recipe that gave us the success above. Today's agent module
+declares `dependencies: []` in its manifest.json (it owns its own
+mesh node + storage internally), so loading it only needs
+`capability_module` for the SDK token handshake.
+
+**1. Stage a modules dir** with `agent` + `capability_module`. The
+plugin manager scans subdirectories named after the module, each with
+a `manifest.json` and the plugin `.so` (older `metadata.json`-only
+modules are silently skipped — easy way to lose half an hour, ask me
+how I know).
 
 ```bash
-# Same instance id has to flow to both processes via env.
+MODS=$(mktemp -d -t lmao-probe-mods.XXXX)
+
+# Agent — already laid out as a manifest.json layout in the Basecamp
+# install dir, so just symlink the whole thing.
+ln -s ~/.local/share/Logos/LogosBasecamp/modules/agent          "$MODS/agent"
+
+# Capability module — needs a synthesized manifest.json. The .so can
+# come from anywhere; pick a build that's around.
+mkdir -p "$MODS/capability_module"
+ln -s <path-to>/capability_module_plugin.so \
+      "$MODS/capability_module/capability_module_plugin.so"
+cat > "$MODS/capability_module/manifest.json" <<'EOF'
+{
+  "author": "Logos Core Team",
+  "category": "security",
+  "dependencies": [],
+  "description": "Coordinates permissions between modules",
+  "main": { "linux-amd64": "capability_module_plugin.so" },
+  "manifestVersion": "0.2.0",
+  "name": "capability_module",
+  "type": "core",
+  "version": "1.0.0"
+}
+EOF
+```
+
+**2. Start `logoscore` in Remote mode**:
+
+```bash
 export LOGOS_INSTANCE_ID=$(uuidgen | tr -d - | head -c12)
 
-logoscore --mode 0 \
-    -m ~/.local/share/Logos/LogosBasecamp/modules \
-    -l delivery_module,storage_module,accounts_module,agent
+logoscore --mode 0 -m "$MODS" -l capability_module,agent \
+    > /tmp/logoscore.log 2>&1 &
 ```
 
-In another terminal — same `LOGOS_INSTANCE_ID`:
+…and **wait ~45 s** for it to come up. The agent module's bundled
+lmao subprocess does a cold dial-out to the public `logos.dev` Waku
+fleet, which takes 20–40 s before the agent's `info()` reports
+`storage_enabled: true` and a real pubkey. (Calling `info()` earlier
+just gets `{"error": "daemon not running"}` from the agent's own
+validation — the IPC works fine; the *agent state* is just not
+populated yet.)
+
+**3. Run the probe** in the same shell (so it inherits
+`LOGOS_INSTANCE_ID`):
 
 ```bash
-export LOGOS_INSTANCE_ID=<same as above>
-
-./build/agent_info_probe
+./result/bin/agent_info_probe
 ```
 
-Expected output (something like):
+Two output streams, both printing the same JSON:
 
-```
-agent.info() → {"name":"…","pubkey":"…","capabilities":[…],…}
-{"name":"…","pubkey":"…","capabilities":[…],…}
-```
+- stderr (via `qInfo`):  `agent.info() → {"kind":"info","name":"…",…}`
+- stdout (via `fputs`):  `{"kind":"info","name":"…",…}`
 
-(First line via `qInfo`, second line via `fputs(stdout)` so you can
-pipe `./build/agent_info_probe | jq .`.)
+So `./result/bin/agent_info_probe | jq .` gives you a clean parsed
+view.
 
 ### Outcomes — what we learn
 
@@ -158,9 +223,8 @@ mechanical.
 
 ## Status
 
-- [x] Phase A scaffolded — needs someone with Qt6 + the SDK in their
-      shell to actually compile + run it.
-- [ ] Phase A green-lights
-- [ ] Phase B scaffolded
+- [x] Phase A scaffolded
+- [x] Phase A green-lights — verified with real `agent.info()` JSON over QtRO, see top of this README
+- [ ] Phase B scaffolded — Rust crate + cmake-rs + bindgen over a `shim.h`
 - [ ] Phase B green-lights → open the actual `refactor/cli-as-remote-consumer`
       branch tracked in #19's roll-out
