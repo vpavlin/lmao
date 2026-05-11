@@ -17,3 +17,8 @@ dist/
 # Drop this entry if you want to publish slides alongside the code.
 /slides/
 /SLIDES_CONTEXT.md
+
+# Nix build-output symlinks in experiments/ that point at /nix/store
+# paths meaningless on anyone else's machine.
+/experiments/**/result
+/experiments/**/result-*
