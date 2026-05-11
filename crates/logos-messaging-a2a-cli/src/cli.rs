@@ -12,6 +12,11 @@ pub enum TransportKind {
     /// External nwaku node over the REST API.
     #[cfg(feature = "rest")]
     Rest,
+    /// Basecamp's `delivery_module`, reached via the LogosAPI shim.
+    /// Use this when the agent runs inside (or as a child of) a
+    /// `logoscore` / Basecamp host with `delivery_module` loaded.
+    #[cfg(feature = "shim")]
+    DeliveryModule,
 }
 
 /// Optional storage backend for offloading exec audit logs (and, in
@@ -26,6 +31,11 @@ pub enum StorageKind {
     /// Embedded Logos Storage (Codex) node via libstorage FFI.
     #[cfg(feature = "libstorage")]
     Libstorage,
+    /// Basecamp's `storage_module`, reached via the LogosAPI shim.
+    /// Use this when the agent runs inside (or as a child of) a
+    /// `logoscore` / Basecamp host with `storage_module` loaded.
+    #[cfg(feature = "shim")]
+    StorageModule,
 }
 
 #[cfg(not(any(feature = "logos-delivery", feature = "rest")))]
@@ -109,6 +119,15 @@ pub struct Cli {
     /// running peer's `lmao storage info` output (or its startup log).
     #[arg(long = "storage-bootstrap", global = true)]
     pub storage_bootstrap: Vec<String>,
+
+    /// JSON config passed to `delivery_module.createNode(cfg)` when
+    /// `--transport delivery-module` is selected. If unset, the CLI
+    /// asks `delivery_module.getAvailableConfigs()` and picks the
+    /// preset matching `--preset`. Override when you need a non-default
+    /// pubsub mesh, port pinning, or a custom cluster id.
+    #[cfg(feature = "shim")]
+    #[arg(long, global = true)]
+    pub delivery_module_cfg: Option<String>,
 
     /// Path to the trust list TOML file. `agent run` loads it on
     /// startup; the `lmao trust` subcommands read/write it. Defaults to

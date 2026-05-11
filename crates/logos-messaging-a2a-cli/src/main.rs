@@ -9,6 +9,8 @@ mod info;
 mod metrics;
 mod presence;
 mod session;
+#[cfg(feature = "shim")]
+mod shim;
 mod storage;
 mod task;
 mod trust;
@@ -92,18 +94,38 @@ async fn main() -> Result<()> {
         .probe()
         .await;
 
+    // Optional shim — only built when a shim-backed transport or
+    // storage variant is selected. Constructed once and shared so both
+    // backends drive the same LogosAPI consumer / Qt event loop.
+    #[cfg(feature = "shim")]
+    let shim_handle = if !daemon_can_handle && shim::cli_needs_shim(&cli) {
+        Some(shim::build(&cli)?)
+    } else {
+        None
+    };
+
     let transport: Arc<dyn Transport> = if daemon_can_handle {
         // Placeholder. None of the daemon-aware code paths actually
         // touch this transport — the handlers route through IPC and
         // return before falling back to it.
         Arc::new(logos_messaging_a2a_transport::memory::InMemoryTransport::new())
     } else {
-        build_transport(&cli).await?
+        build_transport(
+            &cli,
+            #[cfg(feature = "shim")]
+            shim_handle.clone(),
+        )
+        .await?
     };
     let storage: Option<Arc<dyn StorageBackend>> = if daemon_can_handle {
         None
     } else {
-        build_storage(&cli).await?
+        build_storage(
+            &cli,
+            #[cfg(feature = "shim")]
+            shim_handle.clone(),
+        )
+        .await?
     };
 
     match cli.command {
@@ -144,7 +166,10 @@ async fn main() -> Result<()> {
 /// command handlers can share a single signature. Also used by daemon-
 /// aware handlers (e.g. `info`) on the fallback path when no daemon is
 /// listening.
-pub(crate) async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
+pub(crate) async fn build_transport(
+    cli: &Cli,
+    #[cfg(feature = "shim")] shim: Option<Arc<logos_core_bindings::Shim>>,
+) -> Result<Arc<dyn Transport>> {
     match cli.transport {
         #[cfg(feature = "logos-delivery")]
         TransportKind::LogosDelivery => {
@@ -175,14 +200,71 @@ pub(crate) async fn build_transport(cli: &Cli) -> Result<Arc<dyn Transport>> {
             use logos_messaging_a2a_transport::nwaku_rest::LogosMessagingTransport;
             Ok(Arc::new(LogosMessagingTransport::new(&cli.waku)))
         }
+        #[cfg(feature = "shim")]
+        TransportKind::DeliveryModule => {
+            use logos_messaging_a2a_transport::DeliveryModuleTransport;
+            let shim = shim.ok_or_else(|| {
+                anyhow::anyhow!("--transport delivery-module requires the shim to be available")
+            })?;
+            // No explicit cfg? Fall back to delivery_module's preset
+            // catalog. Tries `--preset` first, then the first preset
+            // the module reports; if none, errors with the catalog so
+            // the user can pick.
+            let cfg_json = match cli.delivery_module_cfg.clone() {
+                Some(c) => c,
+                None => shim_delivery_cfg_from_preset(&shim, &cli.preset).await?,
+            };
+            let t = DeliveryModuleTransport::new(shim, &cfg_json)
+                .await
+                .map_err(|e| anyhow::anyhow!("delivery_module transport: {e}"))?;
+            Ok(Arc::new(t))
+        }
     }
+}
+
+/// Ask `delivery_module.getAvailableConfigs()` for its preset catalog
+/// and return the JSON config for `preset`. Used when the user picks
+/// `--transport delivery-module` without an explicit `--delivery-module-cfg`.
+#[cfg(feature = "shim")]
+async fn shim_delivery_cfg_from_preset(
+    shim: &logos_core_bindings::Shim,
+    preset: &str,
+) -> Result<String> {
+    // getAvailableConfigs returns a JSON-encoded map { preset: cfgJson, ... }
+    let raw = shim
+        .call("delivery_module", "getAvailableConfigs", "[]", 10_000)
+        .map_err(|e| anyhow::anyhow!("delivery_module getAvailableConfigs: {e}"))?;
+    let map: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("getAvailableConfigs returned non-JSON: {e}"))?;
+    // The catalog may arrive as either a {"value": {...}} envelope or
+    // a bare map — accept both.
+    let catalog = map.get("value").unwrap_or(&map);
+    if let Some(cfg) = catalog.get(preset) {
+        // Each entry is itself JSON-encoded (delivery_module historically
+        // returned strings). Tolerate both shapes.
+        return Ok(match cfg {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        });
+    }
+    let presets: Vec<String> = catalog
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    anyhow::bail!(
+        "preset `{preset}` not in delivery_module catalog (available: {presets:?}). \
+         Override with --delivery-module-cfg <json>."
+    )
 }
 
 /// Construct the chosen storage backend, if any. Returns `Ok(None)` when
 /// the user picked `--storage none` so callers don't need to thread a
 /// dummy backend through the call sites.
 #[allow(dead_code)] // also re-exported to daemon-aware fallback paths
-pub(crate) async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBackend>>> {
+pub(crate) async fn build_storage(
+    cli: &Cli,
+    #[cfg(feature = "shim")] shim: Option<Arc<logos_core_bindings::Shim>>,
+) -> Result<Option<Arc<dyn StorageBackend>>> {
     match cli.storage {
         StorageKind::None => Ok(None),
         #[cfg(feature = "libstorage")]
@@ -209,6 +291,14 @@ pub(crate) async fn build_storage(cli: &Cli) -> Result<Option<Arc<dyn StorageBac
                 eprintln!("[storage] SPR: {spr}");
             }
             Ok(Some(Arc::new(backend)))
+        }
+        #[cfg(feature = "shim")]
+        StorageKind::StorageModule => {
+            use logos_messaging_a2a_storage::StorageModuleBackend;
+            let shim = shim.ok_or_else(|| {
+                anyhow::anyhow!("--storage storage-module requires the shim to be available")
+            })?;
+            Ok(Some(Arc::new(StorageModuleBackend::new(shim))))
         }
     }
 }
