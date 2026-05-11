@@ -35,9 +35,6 @@ fn main() {
     for lib in &["Qt6Core", "Qt6Network", "Qt6RemoteObjects"] {
         println!("cargo:rustc-link-lib={lib}");
     }
-    println!("cargo:rustc-link-lib=boost_system");
-    println!("cargo:rustc-link-lib=ssl");
-    println!("cargo:rustc-link-lib=crypto");
     println!("cargo:rustc-link-lib=stdc++");
 
     let bindings = bindgen::Builder::default()
