@@ -2165,6 +2165,7 @@ dependencies = [
  "hex",
  "k256",
  "libc",
+ "logos-core-bindings",
  "logos-messaging-a2a-core",
  "logos-messaging-a2a-crypto",
  "logos-messaging-a2a-node",

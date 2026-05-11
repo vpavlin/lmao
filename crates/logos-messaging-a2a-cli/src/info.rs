@@ -97,7 +97,15 @@ async fn print_via_daemon(client: &DaemonClient, json: bool) -> Result<()> {
 }
 
 async fn print_via_ephemeral(cli: &Cli) -> Result<()> {
-    let transport = crate::build_transport(cli).await?;
+    // info's ephemeral fallback never needs a shim — if the user
+    // selected --transport delivery-module they should already be
+    // running through a daemon. Pass `None` to keep this path simple.
+    let transport = crate::build_transport(
+        cli,
+        #[cfg(feature = "shim")]
+        None,
+    )
+    .await?;
     let identity = IdentityConfig {
         keyfile: cli.keyfile.clone(),
         encrypt: cli.encrypt,
