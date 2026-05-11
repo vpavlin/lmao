@@ -50,6 +50,11 @@ mod logos_delivery_sys;
 #[cfg(feature = "logos-delivery")]
 pub use logos_delivery::LogosDeliveryTransport;
 
+#[cfg(feature = "delivery-module")]
+pub mod delivery_module_transport;
+#[cfg(feature = "delivery-module")]
+pub use delivery_module_transport::DeliveryModuleTransport;
+
 /// Swappable transport trait — real Logos Messaging in production,
 /// in-memory mock in tests.
 ///

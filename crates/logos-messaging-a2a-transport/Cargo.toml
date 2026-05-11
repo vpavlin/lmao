@@ -6,8 +6,12 @@ edition = "2021"
 [features]
 default = ["rest"]
 rest = ["reqwest"]
-logos-core = ["base64"]
-logos-delivery = ["base64"]
+logos-core = ["dep:base64"]
+logos-delivery = ["dep:base64"]
+# Transport that drives Basecamp's `delivery_module` via the LogosAPI
+# shim (`logos-core-bindings`). Same trade-offs as the storage-module
+# backend: one node shared across modules, every call is ~ms IPC.
+delivery-module = ["dep:logos-core-bindings", "dep:base64"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -22,6 +26,7 @@ sha2 = { workspace = true }
 bloomfilter = { workspace = true }
 base64 = { version = "0.22", optional = true }
 tracing = { workspace = true }
+logos-core-bindings = { path = "../logos-core-bindings", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

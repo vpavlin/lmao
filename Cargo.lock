@@ -2309,6 +2309,7 @@ dependencies = [
  "base64",
  "bloomfilter",
  "hex",
+ "logos-core-bindings",
  "reqwest",
  "serde",
  "serde_json",
