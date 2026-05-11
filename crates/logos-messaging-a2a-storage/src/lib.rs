@@ -39,6 +39,11 @@ mod libstorage_backend;
 #[cfg(feature = "libstorage")]
 pub use libstorage_backend::LibstorageBackend;
 
+#[cfg(feature = "storage-module")]
+mod storage_module_backend;
+#[cfg(feature = "storage-module")]
+pub use storage_module_backend::StorageModuleBackend;
+
 use std::fmt;
 
 /// Errors returned by storage operations.

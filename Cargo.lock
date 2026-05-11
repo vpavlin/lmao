@@ -2292,7 +2292,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "logos-core-bindings",
  "reqwest",
+ "serde_json",
  "storage-bindings",
  "tempfile",
  "tokio",
