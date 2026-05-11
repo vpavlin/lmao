@@ -169,6 +169,19 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     const QString udpPort     = qEnvironmentVariable("LMAO_AGENT_UDP_PORT",     "9500");
     const QString storagePort = qEnvironmentVariable("LMAO_AGENT_STORAGE_PORT", "19500");
 
+    // Shim mode: route storage + messaging through Basecamp's
+    // `storage_module` + `delivery_module` instead of bundling our
+    // own libstorage / liblogosdelivery in the LGX. Opt-in via
+    // `LMAO_AGENT_USE_SHIM=1` so the existing libstorage / embedded-Waku
+    // path stays the default until the rollout (issue #19) is complete.
+    //
+    // TODO(issue #19): once the dependent flake plumbing lands, declare
+    // `["delivery_module", "storage_module"]` in metadata.json so
+    // Basecamp loads them before us. Until then the operator must
+    // launch with all three modules in `-l` so the shim's `getClient`
+    // calls find their counterparties in the registry.
+    const bool useShim = qEnvironmentVariable("LMAO_AGENT_USE_SHIM") == QStringLiteral("1");
+
     QStringList args;
     // Persistent identity: keyfile lives next to the storage dir so
     // restarting Basecamp doesn't reroll the agent's secp256k1 pubkey.
@@ -177,13 +190,22 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     const QString agentKeyfile =
         QDir::homePath() + "/.local/share/lmao/agent.key";
     args << "--daemon-socket"     << m_state->socketPath
-         << "--transport"         << "logos-delivery"
-         << "--tcp-port"          << tcpPort
-         << "--udp-port"          << udpPort
-         << "--storage"           << "libstorage"
-         << "--storage-data-dir"  << QDir::homePath() + "/.local/share/lmao/storage"
-         << "--storage-port"      << storagePort
          << "--keyfile"           << agentKeyfile;
+
+    if (useShim) {
+        // The shim path delegates network + storage entirely to
+        // Basecamp's own modules. No port pinning, no data-dir; both
+        // are owned by delivery_module / storage_module.
+        args << "--transport" << "delivery-module"
+             << "--storage"   << "storage-module";
+    } else {
+        args << "--transport"         << "logos-delivery"
+             << "--tcp-port"          << tcpPort
+             << "--udp-port"          << udpPort
+             << "--storage"           << "libstorage"
+             << "--storage-data-dir"  << QDir::homePath() + "/.local/share/lmao/storage"
+             << "--storage-port"      << storagePort;
+    }
 
     // Optional explicit entry-node peers — comma- or whitespace-separated
     // multiaddrs from $LMAO_AGENT_ENTRY_NODES. Used when the preset's
@@ -201,12 +223,10 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
         }
     }
 
-    // Optional storage-layer bootstrap peers (SPRs) — same shape as
-    // the Waku entry-node mechanism above, but for the embedded
-    // libstorage Codex node. Lets two storage nodes find each other
-    // directly so the "View log" / fetch-CID path works without
-    // relying on the public DHT bootstrap.
-    {
+    // Optional storage-layer bootstrap peers (SPRs) — libstorage only.
+    // In shim mode `storage_module` owns the Codex node and we have no
+    // say in its bootstrap config from here.
+    if (!useShim) {
         const QString raw = qEnvironmentVariable("LMAO_AGENT_STORAGE_BOOTSTRAP");
         if (!raw.isEmpty()) {
             const auto parts = raw.split(QRegularExpression(QStringLiteral("[\\s,]+")),
@@ -228,38 +248,48 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
     m_state->process.setArguments(args);
     m_state->process.setProcessChannelMode(QProcess::ForwardedChannels);
 
-    // Ensure the spawned `lmao agent run` can find liblogosdelivery.so.
-    // Logos Basecamp launches its `logos_host` subprocesses with a
-    // scrubbed/replaced environment (Nix-style PATH munging, LD path
-    // overrides), so LD_LIBRARY_PATH set in the user's launch shell
-    // doesn't reach us here. We re-prepend $LIBLOGOSDELIVERY_LIB_DIR
-    // (also commonly set in the launch shell, and *that* usually does
-    // survive) to whatever LD_LIBRARY_PATH the child would otherwise
-    // inherit, and pass an explicit env to QProcess so the override
-    // sticks.
+    // Environment for the spawned `lmao agent run`. In the legacy path
+    // we have to surface liblogosdelivery.so via LD_LIBRARY_PATH; in
+    // shim mode there's no such library to find, but we must make sure
+    // LOGOS_INSTANCE_ID propagates so the child's shim can discover the
+    // QtRO registry running in this same Basecamp process.
     {
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        // Build LD_LIBRARY_PATH from (in priority order): the operator's
-        // explicit LIBLOGOSDELIVERY_LIB_DIR, this plugin's own directory
-        // (in case build-fat-lgx.sh bundled liblogosdelivery.so next to
-        // the .so), and whatever was already in LD_LIBRARY_PATH. The
-        // plugin-dir fallback is what makes the LGX self-contained on
-        // an official-Basecamp install.
-        QStringList ldDirs;
-        const QString opLibDir = qEnvironmentVariable("LIBLOGOSDELIVERY_LIB_DIR");
-        if (!opLibDir.isEmpty()) ldDirs << opLibDir;
-        const QString plugDir = pluginDir();
-        if (!plugDir.isEmpty()) ldDirs << plugDir;
-        const QString existing = env.value("LD_LIBRARY_PATH");
-        if (!existing.isEmpty()) ldDirs << existing;
-        if (!ldDirs.isEmpty()) {
-            env.insert("LD_LIBRARY_PATH", ldDirs.join(":"));
-        }
-        if (opLibDir.isEmpty() && plugDir.isEmpty()) {
-            qWarning().noquote()
-                << "AgentImpl: neither LIBLOGOSDELIVERY_LIB_DIR nor a"
-                << "bundled libdir were resolvable; the spawned `lmao"
-                << "agent run` may fail to load liblogosdelivery.so.";
+        if (!useShim) {
+            // Build LD_LIBRARY_PATH from (in priority order): the operator's
+            // explicit LIBLOGOSDELIVERY_LIB_DIR, this plugin's own directory
+            // (in case build-fat-lgx.sh bundled liblogosdelivery.so next to
+            // the .so), and whatever was already in LD_LIBRARY_PATH. The
+            // plugin-dir fallback is what makes the LGX self-contained on
+            // an official-Basecamp install.
+            QStringList ldDirs;
+            const QString opLibDir = qEnvironmentVariable("LIBLOGOSDELIVERY_LIB_DIR");
+            if (!opLibDir.isEmpty()) ldDirs << opLibDir;
+            const QString plugDir = pluginDir();
+            if (!plugDir.isEmpty()) ldDirs << plugDir;
+            const QString existing = env.value("LD_LIBRARY_PATH");
+            if (!existing.isEmpty()) ldDirs << existing;
+            if (!ldDirs.isEmpty()) {
+                env.insert("LD_LIBRARY_PATH", ldDirs.join(":"));
+            }
+            if (opLibDir.isEmpty() && plugDir.isEmpty()) {
+                qWarning().noquote()
+                    << "AgentImpl: neither LIBLOGOSDELIVERY_LIB_DIR nor a"
+                    << "bundled libdir were resolvable; the spawned `lmao"
+                    << "agent run` may fail to load liblogosdelivery.so.";
+            }
+        } else {
+            // In shim mode the child uses LogosAPI over QtRO. The
+            // registry URL is derived from LOGOS_INSTANCE_ID, which the
+            // host (Basecamp) sets in our env. QProcessEnvironment
+            // already inherits it from systemEnvironment(); just sanity-
+            // check and warn loudly if it's missing.
+            if (env.value("LOGOS_INSTANCE_ID").isEmpty()) {
+                qWarning().noquote()
+                    << "AgentImpl: LOGOS_INSTANCE_ID is not set; the"
+                    << "shim path will fail to find Basecamp's QtRO"
+                    << "registry. Are you running outside logos_host?";
+            }
         }
         m_state->process.setProcessEnvironment(env);
     }
