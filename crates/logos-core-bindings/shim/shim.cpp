@@ -30,6 +30,7 @@
 #include "logos_api_client.h"
 #include "logos_mode.h"
 #include "logos_object.h"
+#include "logos_types.h"
 
 namespace {
 
@@ -86,9 +87,36 @@ char* dup_cstr(const char* s) {
 // QtRO bridge wraps as QString — so the common case is "raw is a
 // QString that's already JSON". Some modules return QVariantMap or
 // QVariantList; convert those via QJsonDocument::fromVariant.
+//
+// As of logos-cpp-sdk's "Abstraction & Refactor part 1" the SDK can
+// also return a `LogosResult` struct ({success, value, error}) — we
+// unwrap that here so callers see the underlying value or a
+// daemon-shape `{"error": "..."}` payload.
 QString variant_to_json(const QVariant& raw) {
     if (!raw.isValid())
         return QStringLiteral("{\"error\":\"invalid response (no method dispatched?)\"}");
+
+    // Unwrap LogosResult before anything else — the inner value goes
+    // through the same conversion path so we get the same JSON shape
+    // as pre-refactor SDKs that returned the bare value. Some modules'
+    // failure paths leave r.error as an invalid QVariant; substitute a
+    // generic message so the caller doesn't see `{"error":""}` which
+    // would otherwise look like a successful empty response.
+    if (raw.canConvert<LogosResult>() &&
+        QString::fromUtf8(raw.typeName()) == QStringLiteral("LogosResult")) {
+        const LogosResult r = raw.value<LogosResult>();
+        if (!r.success) {
+            QString msg = r.error.toString();
+            if (msg.isEmpty()) {
+                msg = QStringLiteral("LogosResult: success=false, error unset");
+            }
+            QJsonObject err;
+            err["error"] = msg;
+            return QString::fromUtf8(
+                QJsonDocument(err).toJson(QJsonDocument::Compact));
+        }
+        return variant_to_json(r.value);
+    }
 
     if (raw.canConvert<QString>()) {
         QString s = raw.toString();

@@ -230,12 +230,25 @@ async fn shim_delivery_cfg_from_preset(
     shim: &logos_core_bindings::Shim,
     preset: &str,
 ) -> Result<String> {
-    // getAvailableConfigs returns a JSON-encoded map { preset: cfgJson, ... }
+    // 60 s timeout: delivery_module's first call after startup can be
+    // slow if the host process is still warming up its QtRO links.
+    // getAvailableConfigs itself is cheap once the wire is open.
     let raw = shim
-        .call("delivery_module", "getAvailableConfigs", "[]", 10_000)
+        .call("delivery_module", "getAvailableConfigs", "[]", 60_000)
         .map_err(|e| anyhow::anyhow!("delivery_module getAvailableConfigs: {e}"))?;
     let map: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("getAvailableConfigs returned non-JSON: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("getAvailableConfigs returned non-JSON: {raw}: {e}"))?;
+    // Surface daemon-side error shapes first so the user sees the real
+    // reason (timeout, module-not-loaded, etc.) instead of a wrong-
+    // looking "preset not in catalog" message.
+    if let Some(err) = map.get("error").and_then(serde_json::Value::as_str) {
+        anyhow::bail!("delivery_module getAvailableConfigs: {err}");
+    }
+    if map.get("kind").and_then(serde_json::Value::as_str) == Some("error") {
+        if let Some(msg) = map.get("message").and_then(serde_json::Value::as_str) {
+            anyhow::bail!("delivery_module getAvailableConfigs: {msg}");
+        }
+    }
     // The catalog may arrive as either a {"value": {...}} envelope or
     // a bare map — accept both.
     let catalog = map.get("value").unwrap_or(&map);
