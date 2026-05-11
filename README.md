@@ -255,6 +255,48 @@ export LD_LIBRARY_PATH="$LIBLOGOSDELIVERY_LIB_DIR:$LD_LIBRARY_PATH"
 export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
 ```
 
+#### Shim mode (opt-in) — route through Basecamp's `delivery_module` + `storage_module`
+
+By default, the agent module spawns an `lmao` child that brings its own
+embedded `liblogosdelivery.so` and libstorage. Set `LMAO_AGENT_USE_SHIM=1`
+to instead delegate networking + storage to Basecamp's own
+`delivery_module` and `storage_module`, sharing one Waku node and one
+Codex node with every other module in the same Basecamp host.
+
+```bash
+# Build lmao with the `shim` feature.
+LOGOS_CPP_SDK_DIR=/path/to/logos-cpp-sdk \
+  cargo build --release -p logos-messaging-a2a-cli \
+  --no-default-features --features shim,rest
+export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
+
+# Tell the agent module to use the shim path, and pass the createNode
+# JSON for delivery_module explicitly (auto-discovery is broken in the
+# current installed delivery_module — see issues.md).
+export LMAO_AGENT_USE_SHIM=1
+export LMAO_AGENT_DELIVERY_CFG='{"logLevel":"WARN","mode":"Core","preset":"logos.dev"}'
+```
+
+Launch Basecamp (or `logoscore`) with `delivery_module`, `storage_module`,
+and `agent` loaded. The agent's spawned `lmao` will:
+
+- talk to `delivery_module.createNode/start/send/subscribe` via QtRO
+  (no bundled `liblogosdelivery.so`),
+- talk to `storage_module.uploadInit/uploadChunk/uploadFinalize/downloadFile`
+  via QtRO (no bundled libstorage),
+- continue to use its own keyfile + IPC socket for identity / daemon
+  protocol (the agent's secp256k1 pubkey is unchanged across modes).
+
+Headless smoke:
+
+```bash
+logoscore -m ~/.local/share/Logos/LogosBasecampDev/modules \
+  -l delivery_module,storage_module,agent \
+  -c "agent.info()" --quit-on-finish
+```
+
+→ should return `{"kind":"info","name":"basecamp","pubkey":"…","capabilities":["text"],…}`.
+
 ### 5. Plug in a real coding agent
 
 The demo defaults to `sed` so it works without a model. Swap in
