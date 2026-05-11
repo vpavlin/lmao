@@ -7,8 +7,13 @@ description = "Storage backend trait and Logos Storage (Codex) REST implementati
 [features]
 default = ["rest"]
 rest = ["reqwest"]
-logos-core = ["base64"]
+logos-core = ["dep:base64"]
 libstorage = ["dep:storage-bindings", "dep:tempfile"]
+# Storage backend that calls Basecamp's `storage_module` via the Logos
+# C++ SDK (through `logos-core-bindings`). Mutually compatible with the
+# other backends — separate trait impls. Whether the shim has real or
+# stub FFI is decided at logos-core-bindings build time.
+storage-module = ["dep:logos-core-bindings", "dep:base64", "dep:serde_json", "dep:tempfile"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -19,10 +24,14 @@ reqwest = { workspace = true, optional = true }
 
 # Logos Core native backend
 base64 = { version = "0.22", optional = true }
+serde_json = { version = "1", optional = true }
 
 # Libstorage native backend
 storage-bindings = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
+
+# storage_module backend (via the Logos C++ SDK shim)
+logos-core-bindings = { path = "../logos-core-bindings", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
