@@ -8,10 +8,12 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -27,6 +29,7 @@
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "logos_mode.h"
+#include "logos_object.h"
 
 namespace {
 
@@ -122,6 +125,21 @@ struct LogosShim {
     std::atomic<bool> ready{false};
     std::mutex ready_mu;
     std::condition_variable ready_cv;
+
+    // ── Event subscription state ─────────────────────────────────
+    //
+    // Cross-thread queue between the Qt thread (eventResponse slots
+    // enqueue here) and the Rust caller's polling thread
+    // (logos_shim_poll_event dequeues). The queue stores ready-to-
+    // hand-out JSON strings already in the
+    //   {"module": …, "event": …, "data": …}
+    // shape so dequeue is just a string copy.
+    std::mutex events_mu;
+    std::condition_variable events_cv;
+    std::deque<std::string> events;
+    // Modules we've already connected an eventResponse slot for.
+    // Calling logos_shim_listen twice for the same module is a no-op.
+    std::vector<std::string> listened;
 };
 
 LogosShim* logos_shim_new(const char* module_name) {
@@ -242,6 +260,78 @@ char* logos_shim_call(LogosShim* shim,
 
     char* result = dup_qstring(slot->result);
     return result ? result : dup_cstr("{\"error\":\"shim oom on result copy\"}");
+}
+
+int logos_shim_listen(LogosShim* shim, const char* module_name, const char* event_name) {
+    if (!shim || !shim->app || !shim->api || !module_name || !event_name) return 0;
+
+    const std::string mn = module_name;
+    const std::string en = event_name;
+    std::atomic<bool> ok{false};
+
+    // Run the actual connect() on the Qt thread (Qt object affinity).
+    // BlockingQueuedConnection so we don't return before the slot is wired.
+    QMetaObject::invokeMethod(
+        shim->app,
+        [shim, mn, en, &ok]() {
+            const std::string key = mn + "\0" + en;
+            // De-dupe: skip if we've already registered this (module, event).
+            for (const auto& k : shim->listened) {
+                if (k == key) {
+                    ok.store(true);
+                    return;
+                }
+            }
+            auto* client = shim->api->getClient(QString::fromStdString(mn));
+            if (!client) return;
+            auto* obj = client->requestObject(QString::fromStdString(mn), Timeout(5000));
+            if (!obj) return;
+            client->onEvent(
+                obj,
+                QString::fromStdString(en),
+                [shim, mn, en](const QString& eventName, const QVariantList& data) {
+                    // Serialise (module, event, data) into a JSON string and
+                    // enqueue. `data` is a QVariantList — already a JSON-array
+                    // shape; convert and embed.
+                    QJsonArray jsonData = QJsonArray::fromVariantList(data);
+                    QJsonObject event;
+                    event["module"] = QString::fromStdString(mn);
+                    event["event"] = eventName;
+                    event["data"] = jsonData;
+                    const std::string s =
+                        QJsonDocument(event).toJson(QJsonDocument::Compact).toStdString();
+                    {
+                        std::lock_guard<std::mutex> lk(shim->events_mu);
+                        shim->events.push_back(s);
+                    }
+                    shim->events_cv.notify_one();
+                    (void)en;
+                });
+            shim->listened.push_back(key);
+            ok.store(true);
+        },
+        Qt::BlockingQueuedConnection);
+
+    return ok.load() ? 1 : 0;
+}
+
+char* logos_shim_poll_event(LogosShim* shim, int timeout_ms) {
+    if (!shim) return nullptr;
+    if (timeout_ms < 0) timeout_ms = 0;
+
+    std::unique_lock<std::mutex> lk(shim->events_mu);
+    if (shim->events.empty()) {
+        // Wait up to timeout_ms for an event.
+        shim->events_cv.wait_for(
+            lk,
+            std::chrono::milliseconds(timeout_ms),
+            [shim]() { return !shim->events.empty(); });
+    }
+    if (shim->events.empty()) return nullptr;
+    std::string ev = std::move(shim->events.front());
+    shim->events.pop_front();
+    lk.unlock();
+    return dup_cstr(ev.c_str());
 }
 
 void logos_shim_free_str(char* s) {

@@ -58,7 +58,31 @@ char* logos_shim_call(LogosShim* shim,
                       const char* args_json,
                       int timeout_ms);
 
-// Free a string returned by `logos_shim_call`. Idempotent for NULL.
+// Register a callback for a specific (module, event_name) pair. After
+// this returns, any `emitEvent(event_name, data)` the module emits gets
+// captured and enqueued; `logos_shim_poll_event` drains the queue.
+// Returns 1 on success, 0 if the client / object couldn't be obtained
+// (registry unreachable, module not loaded, etc.).
+// Calling repeatedly with the same (module, event) pair is harmless;
+// the shim de-duplicates internally.
+int logos_shim_listen(LogosShim* shim, const char* module_name, const char* event_name);
+
+// Block up to `timeout_ms` for the next queued event from any module
+// we're listening to. Returns NULL on timeout. Otherwise returns a
+// heap-allocated JSON object the caller MUST free with
+// `logos_shim_free_str`:
+//   {"module": "<from logos_shim_listen>", "event": "<name>", "data": <payload>}
+// `data` is whatever the module emitted in its eventResponse —
+// already deserialised from the QVariantList into a JSON array (one
+// entry per QVariant), so the typical agent-module pattern of
+// `emitEvent(name, json_string)` arrives as `data = ["<json>"]`.
+//
+// Use a small timeout (e.g. 100 ms) in a tight poll loop, or a
+// larger one when you're idle.
+char* logos_shim_poll_event(LogosShim* shim, int timeout_ms);
+
+// Free a string returned by `logos_shim_call` or `logos_shim_poll_event`.
+// Idempotent for NULL.
 void logos_shim_free_str(char* s);
 
 // Stop the Qt thread, tear down LogosAPI, free the shim. Idempotent

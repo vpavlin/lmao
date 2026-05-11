@@ -125,6 +125,41 @@ mod real {
             unsafe { ffi::logos_shim_free_str(raw as *mut c_char) };
             s
         }
+
+        /// Register interest in `event_name` from `module`. After this
+        /// returns, matching events get enqueued; drain with `poll_event`.
+        /// Repeated calls with the same pair are de-duped by the shim.
+        pub fn listen(&self, module: &str, event_name: &str) -> Result<(), Error> {
+            let m = CString::new(module).map_err(|_| Error::NulInArg("module"))?;
+            let e = CString::new(event_name).map_err(|_| Error::NulInArg("event_name"))?;
+            // SAFETY: both CStrings live for the call.
+            let ok = unsafe { ffi::logos_shim_listen(self.inner, m.as_ptr(), e.as_ptr()) };
+            if ok == 1 {
+                Ok(())
+            } else {
+                Err(Error::ShimError(format!(
+                    "{{\"error\":\"listen({module}, {event_name}) failed — module not loaded?\"}}"
+                )))
+            }
+        }
+
+        /// Block up to `timeout_ms` for the next queued event from any
+        /// previously-listened (module, event) pair. `Ok(None)` on
+        /// timeout, `Ok(Some(json))` on event. JSON shape:
+        /// `{"module": "...", "event": "...", "data": [...]}`.
+        pub fn poll_event(&self, timeout_ms: i32) -> Result<Option<String>, Error> {
+            // SAFETY: returned pointer is shim-heap-allocated or NULL.
+            let raw = unsafe { ffi::logos_shim_poll_event(self.inner, timeout_ms) };
+            if raw.is_null() {
+                return Ok(None);
+            }
+            let s = unsafe { CStr::from_ptr(raw) }
+                .to_str()
+                .map(str::to_owned)
+                .map_err(|_| Error::InvalidUtf8);
+            unsafe { ffi::logos_shim_free_str(raw as *mut c_char) };
+            s.map(Some)
+        }
     }
 
     impl Drop for Shim {
@@ -157,6 +192,12 @@ mod real {
             _args_json: &str,
             _timeout_ms: i32,
         ) -> Result<String, Error> {
+            Err(Error::NotCompiledIn)
+        }
+        pub fn listen(&self, _module: &str, _event_name: &str) -> Result<(), Error> {
+            Err(Error::NotCompiledIn)
+        }
+        pub fn poll_event(&self, _timeout_ms: i32) -> Result<Option<String>, Error> {
             Err(Error::NotCompiledIn)
         }
     }
