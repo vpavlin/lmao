@@ -198,6 +198,14 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
         // are owned by delivery_module / storage_module.
         args << "--transport" << "delivery-module"
              << "--storage"   << "storage-module";
+        // Optional explicit delivery_module cfg. Lets the operator
+        // skip the catalog auto-discovery path when it's broken or
+        // when they want a custom mesh config — passes directly to
+        // `delivery_module.createNode(cfg)`.
+        const QString cfg = qEnvironmentVariable("LMAO_AGENT_DELIVERY_CFG");
+        if (!cfg.isEmpty()) {
+            args << "--delivery-module-cfg" << cfg;
+        }
     } else {
         args << "--transport"         << "logos-delivery"
              << "--tcp-port"          << tcpPort
