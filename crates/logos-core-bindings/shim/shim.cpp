@@ -115,6 +115,13 @@ QString variant_to_json(const QVariant& raw) {
             return QString::fromUtf8(
                 QJsonDocument(err).toJson(QJsonDocument::Compact));
         }
+        // Successful LogosResult with an invalid (void/empty) inner
+        // value — the method ran but had nothing to return. Surface
+        // this as a literal `true` so callers expecting a bool result
+        // see a success, and `{"value":true}` parsers also work.
+        if (!r.value.isValid()) {
+            return QStringLiteral("true");
+        }
         return variant_to_json(r.value);
     }
 

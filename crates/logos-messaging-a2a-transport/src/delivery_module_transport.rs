@@ -46,8 +46,14 @@ use crate::{Result, Transport, TransportError};
 const MODULE: &str = "delivery_module";
 const EVENT_MESSAGE_RECEIVED: &str = "messageReceived";
 
-/// 30 s timeout for normal delivery_module method invocations.
+/// 30 s timeout for normal delivery_module method invocations
+/// (send / subscribe / unsubscribe).
 const SHORT_TIMEOUT_MS: i32 = 30_000;
+/// 120 s timeout for `createNode` + `start` — Waku startup can take
+/// 15-90 s depending on cluster fetch + bootstrap dial latency. The
+/// shim call is synchronous, so the caller's first publish/subscribe
+/// can't fire until this returns.
+const STARTUP_TIMEOUT_MS: i32 = 120_000;
 /// Per-iteration poll timeout for the event-drain task. Short so the
 /// loop reacts promptly to shutdown signals; long enough not to spin.
 const POLL_TIMEOUT_MS: i32 = 250;
@@ -78,12 +84,12 @@ impl DeliveryModuleTransport {
         let setup = tokio::task::spawn_blocking(move || -> Result<()> {
             let create_args = serde_json::to_string(&serde_json::json!([cfg_owned]))
                 .map_err(|e| TransportError::Transport(format!("createNode args: {e}")))?;
-            let resp = call(&backend, "createNode", &create_args, SHORT_TIMEOUT_MS)?;
+            let resp = call(&backend, "createNode", &create_args, STARTUP_TIMEOUT_MS)?;
             // delivery_module's createNode returns a plain `bool` —
             // serialised as either `true` or an error object.
             check_bool(&resp, "createNode")?;
 
-            let resp = call(&backend, "start", "[]", SHORT_TIMEOUT_MS)?;
+            let resp = call(&backend, "start", "[]", STARTUP_TIMEOUT_MS)?;
             check_bool(&resp, "start")?;
 
             backend
