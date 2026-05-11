@@ -1,0 +1,29 @@
+[package]
+name = "logos-core-bindings"
+version = "0.1.0"
+edition = "2021"
+description = "Rust bindings to the Logos C++ SDK's LogosAPI, via a C-callable shim."
+publish = false
+
+# The shim links Qt6 + the Logos C++ SDK static lib + Boost + OpenSSL. We
+# don't want the workspace's default `cargo build --workspace` to require
+# all of that. build.rs checks for the `LOGOS_CPP_SDK_DIR` env var:
+#
+# - **Present**: real build — cmake + bindgen + link of `liblogos_shim.a`
+#   + `liblogos_sdk.a`. The crate's `Shim` API works.
+# - **Absent**: stub build — `Shim::new` returns an error explaining how
+#   to enable the real build. The crate compiles, links, and `cargo
+#   check --workspace` passes on a machine without Qt installed.
+#
+# build.rs emits `cargo:rustc-cfg=logos_core_real` in the real-build
+# case so lib.rs can pick which implementation to compile.
+
+[lib]
+name = "logos_core_bindings"
+
+[dependencies]
+serde_json = "1"
+
+[build-dependencies]
+cmake = "0.1"
+bindgen = "0.70"

@@ -20,6 +20,10 @@ members = [
     "crates/lmao-ffi",
     "crates/logos-messaging-a2a-ffi",
     "crates/logos-messaging-a2a-execution",
+    # Bindings to the Logos C++ SDK via a C-callable shim. build.rs falls
+    # back to stub bindings when LOGOS_CPP_SDK_DIR is unset, so workspace
+    # builds on hosts without Qt6 + the SDK still pass `cargo check`.
+    "crates/logos-core-bindings",
 ]
 # The demo enables the `logos-core` feature which requires liblogos_core.so at
 # link time. Excluding it from the workspace prevents feature unification from
