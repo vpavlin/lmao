@@ -171,16 +171,11 @@ AgentImpl::AgentImpl() : m_state(std::make_shared<State>()) {
 
     // Shim mode: route storage + messaging through Basecamp's
     // `storage_module` + `delivery_module` instead of bundling our
-    // own libstorage / liblogosdelivery in the LGX. Opt-in via
-    // `LMAO_AGENT_USE_SHIM=1` so the existing libstorage / embedded-Waku
-    // path stays the default until the rollout (issue #19) is complete.
-    //
-    // TODO(issue #19): once the dependent flake plumbing lands, declare
-    // `["delivery_module", "storage_module"]` in metadata.json so
-    // Basecamp loads them before us. Until then the operator must
-    // launch with all three modules in `-l` so the shim's `getClient`
-    // calls find their counterparties in the registry.
-    const bool useShim = qEnvironmentVariable("LMAO_AGENT_USE_SHIM") == QStringLiteral("1");
+    // own libstorage / liblogosdelivery in the LGX. This is now the
+    // default. Set `LMAO_AGENT_USE_LEGACY=1` to fall back to the
+    // embedded liblogosdelivery + libstorage path (e.g. when running
+    // outside a logos_host that has those modules loaded).
+    const bool useShim = qEnvironmentVariable("LMAO_AGENT_USE_LEGACY") != QStringLiteral("1");
 
     QStringList args;
     // Persistent identity: keyfile lives next to the storage dir so

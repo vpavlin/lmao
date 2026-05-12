@@ -6,7 +6,6 @@ edition = "2021"
 [features]
 default = ["rest"]
 rest = ["reqwest"]
-logos-core = ["dep:base64"]
 logos-delivery = ["dep:base64"]
 # Transport that drives Basecamp's `delivery_module` via the LogosAPI
 # shim (`logos-core-bindings`). Same trade-offs as the storage-module

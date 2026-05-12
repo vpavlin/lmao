@@ -7,7 +7,6 @@ description = "Storage backend trait and Logos Storage (Codex) REST implementati
 [features]
 default = ["rest"]
 rest = ["reqwest"]
-logos-core = ["dep:base64"]
 libstorage = ["dep:storage-bindings", "dep:tempfile"]
 # Storage backend that calls Basecamp's `storage_module` via the Logos
 # C++ SDK (through `logos-core-bindings`). Mutually compatible with the

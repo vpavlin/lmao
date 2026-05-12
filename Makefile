@@ -1,4 +1,4 @@
-.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real cli-logos-delivery basecamp basecamp-module basecamp-ui basecamp-install basecamp-lgx basecamp-lgx-install
+.PHONY: build test clippy fmt check doc clean examples bench demo demo-in-memory demo-containerized demo-image demo-down demo-logos-core demo-logos-core-real demo-logos-core-shim cli-logos-delivery basecamp basecamp-module basecamp-ui basecamp-install basecamp-lgx basecamp-lgx-install
 
 # Build all crates
 build:
@@ -159,6 +159,13 @@ demo-echo:
 # Logos Core e2e demo (stub)
 demo-logos-core:
 	~/.cargo/bin/cargo run -p logos-core-e2e-demo
+
+# Two-agent logos-core-native demo via shim (delivery_module + storage_module).
+# Requires logoscore running with delivery_module + storage_module loaded and
+# LOGOS_INSTANCE_ID set. LOGOS_CPP_SDK_DIR must point at the logos-cpp-sdk.
+# Usage: LOGOS_CPP_SDK_DIR=/path/to/logos-cpp-sdk make demo-logos-core-shim
+demo-logos-core-shim:
+	LOGOS_CPP_SDK_DIR="$(LOGOS_CPP_SDK_DIR)" ./scripts/demo-logos-core-shim.sh
 
 # Logos Core e2e demo (real SDK)
 # Usage: LOGOS_CORE_LIB_DIR=/path/to/logoscore make demo-logos-core-real
