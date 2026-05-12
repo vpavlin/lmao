@@ -36,3 +36,8 @@ serde_json = { workspace = true }
 name = "logos_delivery_roundtrip"
 path = "examples/logos_delivery_roundtrip.rs"
 required-features = ["logos-delivery"]
+
+[[test]]
+name = "shim_integration"
+path = "tests/shim_integration.rs"
+required-features = ["delivery-module"]

@@ -35,3 +35,8 @@ logos-core-bindings = { path = "../logos-core-bindings", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
+
+[[test]]
+name = "storage_module_integration"
+path = "tests/storage_module_integration.rs"
+required-features = ["storage-module"]
