@@ -18,9 +18,14 @@
 //!   uploadInit → uploadChunk* → uploadFinalize → CID
 //! because it's fully synchronous on the C++ side and doesn't need the
 //! event-subscription channel (which we'd otherwise need to catch
-//! `storageUploadDone` from the async `uploadUrl` flavour). Download
-//! uses `downloadFile(cid, path, local=false)` to a tempfile and reads
-//! the bytes back.
+//! `storageUploadDone` from the async `uploadUrl` flavour).
+//!
+//! Download uses `downloadChunks(cid, false, chunkSize, filepath)` to write
+//! to a tempfile. **downloadChunks starts streaming asynchronously** — the
+//! method returns `{success: true, value: cid}` immediately, and the actual
+//! write completes later via a `storageDownloadDone` event. We subscribe to
+//! that event via `Shim::listen` + `Shim::poll_event` before initiating the
+//! download, and block until the done event arrives.
 
 use std::sync::Arc;
 
@@ -70,6 +75,11 @@ impl StorageModuleBackend {
     /// the daemon's own error shape (`{"kind":"error","message":...}` /
     /// `{"error":...}`) as `StorageError::Http`.
     fn extract_value(v: Value, field: &str) -> Result<String, StorageError> {
+        // Some shim builds return the bare value as a JSON string literal
+        // (not wrapped in an object). Handle that first.
+        if let Some(s) = v.as_str() {
+            return Ok(s.to_owned());
+        }
         if let Some(err) = v.get("message").and_then(Value::as_str) {
             if v.get("kind").and_then(Value::as_str) == Some("error") {
                 return Err(StorageError::Http(err.into()));
@@ -82,7 +92,7 @@ impl StorageModuleBackend {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| {
-                StorageError::Http(format!("missing `{field}` in storage_module response"))
+                StorageError::Http(format!("missing `{field}` in storage_module response: {v}"))
             })
     }
 }
@@ -101,11 +111,14 @@ impl StorageBackend for StorageModuleBackend {
             let resp = me.call("uploadInit", &init_args, SHORT_TIMEOUT_MS)?;
             let session_id = Self::extract_value(resp, "value")?;
 
-            // 2. uploadChunk(sessionId, base64(chunk)) for each chunk.
+            // 2. uploadChunk(sessionId, chunk) for each chunk.
+            // The second arg is QByteArray on the C++ side; use the shim's
+            // {"__base64__": "<b64>"} convention so it arrives as raw bytes.
             for chunk in data.chunks(CHUNK_BYTES) {
                 let b64 = B64.encode(chunk);
-                let chunk_args = serde_json::to_string(&serde_json::json!([session_id, b64]))
-                    .map_err(|e| StorageError::Http(format!("chunk args: {e}")))?;
+                let chunk_args = serde_json::to_string(&serde_json::json!(
+                    [session_id, {"__base64__": b64}]
+                )).map_err(|e| StorageError::Http(format!("chunk args: {e}")))?;
                 let r = me.call("uploadChunk", &chunk_args, SHORT_TIMEOUT_MS)?;
                 if let Some(msg) = r.get("message").and_then(Value::as_str) {
                     if r.get("kind").and_then(Value::as_str) == Some("error") {
@@ -136,20 +149,73 @@ impl StorageBackend for StorageModuleBackend {
         let me = StorageModuleBackend { shim: backend };
         let cid = cid.to_owned();
         tokio::task::spawn_blocking(move || -> Result<Vec<u8>, StorageError> {
-            // downloadFile(cid, path, local=false) — sync per the
-            // storage_module docs. Write to a tempfile, read it back.
+            // Subscribe to the done event before starting the download so we
+            // don't miss a fast completion. De-duped by the shim (safe to call
+            // repeatedly on the same shim instance).
+            me.shim.listen("storage_module", "storageDownloadDone")
+                .map_err(|e| StorageError::Http(format!("listen: {e}")))?;
+
+            // downloadChunks(cid, local=false, chunkSize, filepath) writes to
+            // the file ASYNCHRONOUSLY and returns {success: true, value: cid}
+            // immediately. Actual completion comes via `storageDownloadDone`.
             let tmp = tempfile::NamedTempFile::new()
                 .map_err(|e| StorageError::Http(format!("tempfile: {e}")))?;
             let path = tmp.path().to_string_lossy().to_string();
-            let args = serde_json::to_string(&serde_json::json!([cid, path, false]))
-                .map_err(|e| StorageError::Http(format!("download args: {e}")))?;
-            let resp = me.call("downloadFile", &args, LONG_TIMEOUT_MS)?;
-            // Either daemon-side error shape or success.
+            let args = serde_json::to_string(
+                &serde_json::json!([cid, false, CHUNK_BYTES as i64, path])
+            ).map_err(|e| StorageError::Http(format!("download args: {e}")))?;
+            let resp = me.call("downloadChunks", &args, LONG_TIMEOUT_MS)?;
+            // downloadChunks returns an error immediately if it can't even start.
+            if let Some(err) = resp.get("error").and_then(Value::as_str) {
+                return Err(StorageError::Http(format!("downloadChunks: {err}")));
+            }
             if let Some(msg) = resp.get("message").and_then(Value::as_str) {
                 if resp.get("kind").and_then(Value::as_str) == Some("error") {
-                    return Err(StorageError::Http(format!("downloadFile: {msg}")));
+                    return Err(StorageError::Http(format!("downloadChunks: {msg}")));
                 }
             }
+
+            // Poll for the storageDownloadDone event for this CID.
+            // data[0]=success, data[1]=cid, data[2]=bytes_downloaded
+            loop {
+                let ev = me.shim.poll_event(LONG_TIMEOUT_MS)
+                    .map_err(|e| StorageError::Http(format!("poll_event: {e}")))?;
+                match ev {
+                    None => {
+                        return Err(StorageError::Http(
+                            format!("storageDownloadDone timed out for {cid}")
+                        ));
+                    }
+                    Some(json) => {
+                        let v: Value = serde_json::from_str(&json)
+                            .map_err(|e| StorageError::Http(format!("event JSON: {e}")))?;
+                        if v.get("event").and_then(Value::as_str)
+                            != Some("storageDownloadDone")
+                        {
+                            continue; // skip unrelated events
+                        }
+                        let data = v.get("data").and_then(Value::as_array);
+                        let success = data
+                            .and_then(|d| d.first())
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let event_cid = data
+                            .and_then(|d| d.get(1))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if event_cid != cid {
+                            continue; // event for a different CID
+                        }
+                        if !success {
+                            return Err(StorageError::Http(
+                                format!("storageDownloadDone reported failure for {cid}")
+                            ));
+                        }
+                        break; // done!
+                    }
+                }
+            }
+
             std::fs::read(tmp.path())
                 .map_err(|e| StorageError::Http(format!("read back tempfile: {e}")))
         })

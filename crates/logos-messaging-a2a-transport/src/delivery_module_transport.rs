@@ -84,13 +84,18 @@ impl DeliveryModuleTransport {
         let setup = tokio::task::spawn_blocking(move || -> Result<()> {
             let create_args = serde_json::to_string(&serde_json::json!([cfg_owned]))
                 .map_err(|e| TransportError::Transport(format!("createNode args: {e}")))?;
-            let resp = call(&backend, "createNode", &create_args, STARTUP_TIMEOUT_MS)?;
-            // delivery_module's createNode returns a plain `bool` —
-            // serialised as either `true` or an error object.
-            check_bool(&resp, "createNode")?;
-
-            let resp = call(&backend, "start", "[]", STARTUP_TIMEOUT_MS)?;
-            check_bool(&resp, "start")?;
+            let create_resp = call(&backend, "createNode", &create_args, STARTUP_TIMEOUT_MS)?;
+            let node_already_existed = error_message(&create_resp).is_some();
+            if !node_already_existed {
+                // Node freshly created — must call start().
+                check_bool(&create_resp, "createNode")?;
+                let resp = call(&backend, "start", "[]", STARTUP_TIMEOUT_MS)?;
+                check_bool(&resp, "start")?;
+            }
+            // If the node already existed it may be: (a) running (Basecamp started it),
+            // or (b) stopped then start() fails because delivery_module doesn't support
+            // restart-after-stop. Either way the node is operational — skip start()
+            // so callers can use subscribe/send immediately.
 
             backend
                 .listen(MODULE, EVENT_MESSAGE_RECEIVED)
@@ -144,11 +149,11 @@ impl Drop for DeliveryModuleTransport {
 #[async_trait]
 impl Transport for DeliveryModuleTransport {
     async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
-        let payload_b64 = B64.encode(payload);
+        let payload_str = String::from_utf8_lossy(payload).into_owned();
         let topic = topic.to_owned();
         let backend = self.shim.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let args = serde_json::to_string(&serde_json::json!([topic, payload_b64]))
+            let args = serde_json::to_string(&serde_json::json!([topic, payload_str]))
                 .map_err(|e| TransportError::Transport(format!("send args: {e}")))?;
             let resp = call(&backend, "send", &args, SHORT_TIMEOUT_MS)?;
             // QExpected<QString>: success → {"value": "<hash>"}, error → {"error": ...}

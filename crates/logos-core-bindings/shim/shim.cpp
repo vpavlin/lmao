@@ -136,7 +136,23 @@ QString variant_to_json(const QVariant& raw) {
             trimmed == QStringLiteral("true") || trimmed == QStringLiteral("false")) {
             return s;
         }
-        return QJsonDocument(QJsonValue(s).toObject()).toJson(QJsonDocument::Compact);
+        // Plain string — encode as a JSON string literal.
+        // QJsonValue(s).toObject() returns an empty object, so we use an
+        // array wrapper trick: JSON=["s"], strip the outer [ ].
+        QByteArray arr = QJsonDocument(QJsonArray{QJsonValue(s)}).toJson(QJsonDocument::Compact);
+        return QString::fromUtf8(arr.mid(1, arr.size() - 2));
+    }
+    // QJsonArray / QJsonObject stored directly in a QVariant — returned by
+    // getPluginMethods and other QtProviderObject-based calls. Try explicit
+    // casts before falling back to fromVariant, which doesn't handle these
+    // types reliably across Qt versions.
+    if (raw.canConvert<QJsonArray>()) {
+        QJsonArray arr = raw.value<QJsonArray>();
+        return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    }
+    if (raw.canConvert<QJsonObject>()) {
+        QJsonObject obj = raw.value<QJsonObject>();
+        return QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
     }
     QJsonDocument d = QJsonDocument::fromVariant(raw);
     if (d.isObject() || d.isArray())
@@ -253,7 +269,37 @@ char* logos_shim_call(LogosShim* shim,
             } else if (!doc.isArray()) {
                 out = QStringLiteral("{\"error\":\"args_json must be a JSON array\"}");
             } else {
-                vargs = doc.array().toVariantList();
+                // toVariantList() maps JSON numbers to QVariant(double).
+                // The module provider dispatches by Qt type, and most slots
+                // use int/qlonglong — so coerce whole-number doubles to int
+                // (or qlonglong for larger values) to allow correct dispatch.
+                for (const QJsonValue& jv : doc.array()) {
+                    if (jv.isDouble()) {
+                        double d = jv.toDouble();
+                        double intpart;
+                        if (std::modf(d, &intpart) == 0.0) {
+                            if (d >= INT_MIN && d <= INT_MAX)
+                                vargs.append(QVariant(static_cast<int>(d)));
+                            else
+                                vargs.append(QVariant(static_cast<qlonglong>(d)));
+                        } else {
+                            vargs.append(QVariant(d));
+                        }
+                    } else if (jv.isObject()) {
+                        // {"__base64__": "<base64>"} → QVariant(QByteArray) for binary
+                        // parameters (e.g. storage_module uploadChunk(sessionId, QByteArray)).
+                        const QJsonObject obj = jv.toObject();
+                        const QJsonValue b64v = obj.value(QStringLiteral("__base64__"));
+                        if (!b64v.isUndefined() && b64v.isString()) {
+                            vargs.append(QVariant(QByteArray::fromBase64(
+                                b64v.toString().toLatin1())));
+                        } else {
+                            vargs.append(jv.toVariant());
+                        }
+                    } else {
+                        vargs.append(jv.toVariant());
+                    }
+                }
             }
         }
 

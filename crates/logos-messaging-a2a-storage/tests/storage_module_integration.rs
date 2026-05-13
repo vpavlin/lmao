@@ -109,3 +109,147 @@ async fn download_nonexistent_cid_returns_error() {
     assert!(result.is_err(), "expected error for non-existent CID");
     eprintln!("got expected error: {}", result.unwrap_err());
 }
+
+/// Initialize storage_module Codex node, then do a small upload/download roundtrip.
+///
+/// Use this when storage_module was never initialized by Basecamp (empty data dir).
+/// Pass a writable data dir via `LMAO_TEST_STORAGE_DATA_DIR`; defaults to a
+/// temporary directory under `/tmp/lmao-test-storage` (persistent across the
+/// test run, removed by a separate cleanup step).
+///
+/// After `start()`, Codex needs ~15-30 s to initialize. We do a single blocking
+/// sleep in a spawn_blocking task so the Qt event loop thread is not disturbed
+/// by tokio executor re-scheduling.
+#[tokio::test]
+#[ignore]
+async fn codex_init_then_upload_download() {
+    let Some(shim) = require_shim_env() else { return };
+
+    let data_dir: String = std::env::var("LMAO_TEST_STORAGE_DATA_DIR")
+        .unwrap_or_else(|_| "/tmp/lmao-test-storage".to_string());
+    std::fs::create_dir_all(&data_dir).expect("create data_dir");
+    eprintln!("storage data_dir = {data_dir}");
+
+    // init(cfgJson) — synchronous; must be called before start()
+    let cfg_json = serde_json::json!({
+        "data-dir": data_dir,
+        "log-level": "warn",
+    }).to_string();
+    let init_args = serde_json::to_string(&serde_json::json!([cfg_json])).unwrap();
+    eprintln!("calling init …");
+    let init_result = shim.call("storage_module", "init", &init_args, 30_000);
+    eprintln!("init: {:?}", init_result);
+    match &init_result {
+        Ok(r) if r == "true" => {}
+        Ok(r) => eprintln!("WARN: unexpected init result: {r}"),
+        Err(e) => eprintln!("WARN: init error: {e}"),
+    }
+
+    // start() — asynchronous internally; Codex begins initializing after this
+    let start_result = shim.call("storage_module", "start", "[]", 30_000);
+    eprintln!("start: {:?}", start_result);
+
+    // Give Codex 30 s to fully initialize before making any further IPC calls.
+    // Using std::thread::sleep (not tokio) so the Qt event loop thread is
+    // undisturbed; the shim's Qt thread runs the event loop independently.
+    eprintln!("waiting 30 s for Codex to initialize …");
+    tokio::task::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_secs(30)))
+        .await
+        .expect("sleep task");
+
+    // Verify Codex is up with a single spr() check (long timeout)
+    let spr = shim.call("storage_module", "spr", "[]", 60_000);
+    eprintln!("spr: {:?}", spr);
+    if spr.as_ref().map_or(true, |s| s.contains("\"error\"") || s.contains("success=false")) {
+        eprintln!("SKIP: Codex SPR unavailable — Codex may not have started in time");
+        return;
+    }
+
+    // Upload/download roundtrip via StorageModuleBackend
+    let backend = logos_messaging_a2a_storage::StorageModuleBackend::new(shim);
+    let data = b"hello from codex_init_then_upload_download".to_vec();
+    let cid = backend.upload(data.clone()).await.expect("upload failed");
+    eprintln!("CID: {cid}");
+    assert!(!cid.is_empty());
+    let downloaded = backend.download(&cid).await.expect("download failed");
+    assert_eq!(downloaded, data);
+}
+
+/// Test helper: call getPluginMethods to discover the storage_module API
+#[tokio::test]
+#[ignore]
+async fn list_plugin_methods() {
+    let Some(shim) = require_shim_env() else { return };
+    let result = shim.call("storage_module", "getPluginMethods", "[]", 10_000);
+    eprintln!("getPluginMethods result: {:?}", result);
+    match result {
+        Ok(json) => eprintln!("methods JSON: {json}"),
+        Err(e) => eprintln!("Error: {e}"),
+    }
+}
+
+/// Diagnostic: call zero-arg methods to verify basic dispatch works
+#[tokio::test]
+#[ignore]
+async fn zero_arg_method_calls() {
+    let Some(shim) = require_shim_env() else { return };
+    for method in ["spr", "version", "peerId", "dataDir"] {
+        let result = shim.call("storage_module", method, "[]", 15_000);
+        eprintln!("{method}: {:?}", result);
+    }
+    // Also call uploadInit with 1 arg (just filename, no chunkSize)
+    let result = shim.call("storage_module", "uploadInit", r#"["audit.log"]"#, 15_000);
+    eprintln!("uploadInit(1-arg): {:?}", result);
+    // And with 2 args
+    let result = shim.call("storage_module", "uploadInit", r#"["audit.log", 1048576]"#, 15_000);
+    eprintln!("uploadInit(2-arg): {:?}", result);
+}
+
+/// Diagnostic: inspect package_manager methods and installed modules.
+/// Useful to check if delivery_module can be installed via the AppImage.
+#[tokio::test]
+#[ignore]
+async fn package_manager_inspect() {
+    let Some(shim) = require_shim_env() else { return };
+
+    // List package_manager methods
+    let methods = shim.call("package_manager", "getPluginMethods", "[]", 10_000);
+    eprintln!("package_manager getPluginMethods: {:?}", methods);
+
+    // List installed modules
+    let installed = shim.call("package_manager", "getInstalledModules", "[]", 10_000);
+    eprintln!("getInstalledModules: {:?}", installed);
+
+    // List valid variants
+    let variants = shim.call("package_manager", "getValidVariants", "[]", 10_000);
+    eprintln!("getValidVariants: {:?}", variants);
+}
+
+/// Install delivery_module via the AppImage package_manager, then verify
+/// it's registered and check if it becomes dispatchable.
+///
+/// Prerequisite: copy delivery_module files to
+/// ~/.local/share/Logos/LogosBasecamp/modules/delivery_module/
+/// with a manifest.json using "linux-amd64" as the main variant.
+#[tokio::test]
+#[ignore]
+async fn install_delivery_module() {
+    let Some(shim) = require_shim_env() else { return };
+
+    let dest = "/home/vpavlin/.local/share/Logos/LogosBasecamp/modules/delivery_module";
+    let plugin_so = format!("{dest}/delivery_module_plugin.so");
+
+    // Try installPlugin with directory path
+    let dir_args = serde_json::to_string(&serde_json::json!([dest, false])).unwrap();
+    let result = shim.call("package_manager", "installPlugin", &dir_args, 30_000);
+    eprintln!("installPlugin(dir): {:?}", result);
+
+    // Also try with .so path
+    let so_args = serde_json::to_string(&serde_json::json!([plugin_so, false])).unwrap();
+    let result2 = shim.call("package_manager", "installPlugin", &so_args, 30_000);
+    eprintln!("installPlugin(so): {:?}", result2);
+
+    // Check if now listed
+    let installed = shim.call("package_manager", "getInstalledModules", "[]", 10_000);
+    eprintln!("getInstalledModules after install: {:?}", installed);
+}

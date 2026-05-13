@@ -33,8 +33,10 @@ tempfile = { version = "3", optional = true }
 logos-core-bindings = { path = "../logos-core-bindings", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 wiremock = "0.6"
+tempfile = "3"
+serde_json = { version = "1" }
 
 [[test]]
 name = "storage_module_integration"

@@ -142,3 +142,27 @@ async fn unsubscribe_stops_delivery() {
         }
     }
 }
+
+/// Diagnostic: list delivery_module methods and test createNode via both paths
+#[tokio::test]
+#[ignore]
+async fn delivery_module_diagnostic() {
+    let Some((shim, cfg)) = require_shim_env() else { return };
+
+    // Get methods
+    let methods = shim.call("delivery_module", "getPluginMethods", "[]", 10_000);
+    eprintln!("getPluginMethods: {:?}", methods);
+
+    // Try createNode directly
+    let create_args = serde_json::to_string(&serde_json::json!([cfg])).unwrap();
+    let result = shim.call("delivery_module", "createNode", &create_args, 30_000);
+    eprintln!("createNode (direct): {:?}", result);
+
+    // Try callRemoteMethod(authToken, methodName, argsJson) — the ModuleProxy dispatch path.
+    // authToken="" (no token), methodName="createNode", args=[cfg].
+    // If ModuleProxy::m_provider is set, this should reach the plugin.
+    let call_args = serde_json::to_string(&serde_json::json!(["", "createNode", [cfg]])).unwrap();
+    let result2 = shim.call("delivery_module", "callRemoteMethod", &call_args, 30_000);
+    eprintln!("createNode (callRemoteMethod): {:?}", result2);
+}
+
