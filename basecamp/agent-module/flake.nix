@@ -12,6 +12,21 @@
       configFile = ./metadata.json;
       flakeInputs = inputs;
       preConfigure = ''
+        # The new logos-cpp-sdk (≥ May 2026) runs --general-only before this hook,
+        # generating logos_sdk.h that #includes delivery_module_api.h and
+        # storage_module_api.h. Those headers are only provided when the dep
+        # modules are flake inputs; we declare them as runtime deps only, so
+        # provide minimal stubs so the compilation succeeds.
+        mkdir -p ./generated_code/include
+        for dep in delivery_module storage_module; do
+          if [ ! -f "./generated_code/include/''${dep}_api.h" ]; then
+            class=$(echo "$dep" | sed 's/_\([a-z]\)/\U\1/g;s/^\([a-z]\)/\U\1/g')
+            printf '#pragma once\n#include "logos_api.h"\nclass %s {\npublic:\n    explicit %s(LogosAPI*) {}\n};\n' \
+              "$class" "$class" > ./generated_code/include/''${dep}_api.h
+            printf '#include "%s_api.h"\n' "$dep" > ./generated_code/include/''${dep}_api.cpp
+          fi
+        done
+
         logos-cpp-generator --from-header src/agent_impl.h \
           --backend qt \
           --impl-class AgentImpl \

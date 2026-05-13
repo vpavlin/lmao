@@ -35,6 +35,11 @@ fn main() {
     for lib in &["Qt6Core", "Qt6Network", "Qt6RemoteObjects"] {
         println!("cargo:rustc-link-lib={lib}");
     }
+    // New pre-built logos-cpp-sdk (≥ May 2026) bundles plain-transport with
+    // OpenSSL/Boost.Asio SSL support compiled in. Link those explicitly since
+    // we bypass find_package(logos-cpp-sdk) to avoid Boost/OpenSSL discovery.
+    println!("cargo:rustc-link-lib=ssl");
+    println!("cargo:rustc-link-lib=crypto");
     println!("cargo:rustc-link-lib=stdc++");
 
     let bindings = bindgen::Builder::default()

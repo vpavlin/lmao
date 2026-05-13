@@ -19,8 +19,10 @@ do inference itself. It does:
 
 - **Identity** — each agent has a secp256k1 keypair. No DNS, no central
   registry. Other agents reach you by your pubkey.
-- **Transport** — embedded Logos Messaging node (via `liblogosdelivery`).
-  Pub/sub gossip on the `logos.dev` fleet. No nwaku container, no REST
+- **Transport** — Logos Messaging pub/sub gossip on the `logos.dev`
+  fleet. Inside Logos Basecamp, shares the host's `delivery_module` and
+  `storage_module` (logos-core-native, no duplicate Waku/Codex nodes).
+  Standalone, uses an embedded node via `liblogosdelivery`. No REST
   endpoint, no port forwarding.
 - **Discovery + presence** — agents broadcast a full `AgentCard` once
   (discovery) and a recurring TTL-bounded liveness beacon (presence).
@@ -245,14 +247,55 @@ make basecamp-install
 # → ~/.local/share/Logos/LogosBasecampDev/modules
 ```
 
-Either way, the shell that launches Basecamp must have these env vars
-exported so the module's spawned `lmao agent run` subprocess can find
-its native lib + binary:
+Either way, export the path to a shim-enabled `lmao` binary before
+launching Basecamp:
 
 ```bash
+# Build lmao with shim support (requires logos-cpp-sdk).
+LOGOS_CPP_SDK_DIR=/path/to/logos-cpp-sdk \
+  cargo build --release -p logos-messaging-a2a-cli \
+  --no-default-features --features shim,rest
+export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
+
+# Pass the createNode JSON for delivery_module explicitly
+# (auto-discovery is broken in the current installed delivery_module
+# — see issues.md).
+export LMAO_AGENT_DELIVERY_CFG='{"logLevel":"WARN","mode":"Core","preset":"logos.dev"}'
+```
+
+Launch Basecamp (or `logoscore`) with `delivery_module`, `storage_module`,
+and `agent` loaded. The agent module routes networking and storage through
+Basecamp's own modules by default — sharing one Waku node and one Codex
+node across all modules in the host. The spawned `lmao` will:
+
+- talk to `delivery_module.createNode/start/send/subscribe` via QtRO
+  (no bundled `liblogosdelivery.so`),
+- talk to `storage_module.uploadInit/uploadChunk/uploadFinalize/downloadFile`
+  via QtRO (no bundled libstorage),
+- continue to use its own keyfile + IPC socket for identity / daemon
+  protocol (the agent's secp256k1 pubkey is unchanged across modes).
+
+Headless smoke:
+
+```bash
+logoscore -m ~/.local/share/Logos/LogosBasecampDev/modules \
+  -l delivery_module,storage_module,agent \
+  -c "agent.info()" --quit-on-finish
+```
+
+→ should return `{"kind":"info","name":"basecamp","pubkey":"…","capabilities":["text"],…}`.
+
+#### Legacy mode (opt-out) — embedded liblogosdelivery + libstorage
+
+The agent module spawns `lmao` with its own embedded Waku and Codex
+nodes by default before shim support was added. To revert to that path
+(e.g. when running outside a logos_host that has those modules loaded):
+
+```bash
+export LMAO_AGENT_USE_LEGACY=1
 export LIBLOGOSDELIVERY_LIB_DIR=/path/to/logos-delivery/build
 export LD_LIBRARY_PATH="$LIBLOGOSDELIVERY_LIB_DIR:$LD_LIBRARY_PATH"
-export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)
+export LMAO_BIN=$(realpath target/release/logos-messaging-a2a)  # built without --features shim
 ```
 
 #### Shim mode (opt-in) — route through Basecamp's `delivery_module` + `storage_module`

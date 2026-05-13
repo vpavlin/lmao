@@ -3,6 +3,13 @@
 //!
 //! Exposes LmaoNode operations via C-compatible functions.
 //! The Qt module (C++) calls these functions to manage agents and messaging.
+//!
+//! # Transport
+//!
+//! This FFI crate is **standalone-only**: it uses `LogosMessagingTransport`
+//! (nwaku REST) and has no dependency on logos-core-bindings or the shim.
+//! For logos-core-native operation inside a logos_host, use the
+//! `basecamp/agent-module` subprocess approach instead.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;

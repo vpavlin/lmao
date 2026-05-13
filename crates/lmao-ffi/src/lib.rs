@@ -2,6 +2,20 @@
 //!
 //! All functions accept/return JSON strings (UTF-8, null-terminated).
 //! Caller must free returned strings with lmao_free_string().
+//!
+//! # Transport
+//!
+//! This FFI crate is **standalone-only**: it uses `LogosMessagingTransport`
+//! (nwaku REST) and has no dependency on logos-core-bindings or the shim.
+//! It is suitable for embedding lmao in C/C++ contexts that are not running
+//! inside a logos_host process.
+//!
+//! For logos-core-native operation (sharing delivery_module + storage_module
+//! with Basecamp), use the `basecamp/agent-module` approach instead: that
+//! module spawns `lmao agent run --transport delivery-module --storage
+//! storage-module` as a subprocess and communicates over a Unix socket.
+//! The subprocess inherits LOGOS_INSTANCE_ID from the host and auto-selects
+//! the shim backends.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;

@@ -22,6 +22,31 @@ pub fn cli_needs_shim(cli: &Cli) -> bool {
     transport_needs || storage_needs
 }
 
+/// Apply logos-core-native defaults when running inside a logos_host.
+///
+/// If `LOGOS_INSTANCE_ID` is set (the variable logos_host injects into
+/// every child process) and the binary was compiled with real shim
+/// support, switch any still-at-default transport/storage to the shim
+/// variants so the spawned agent shares the host's Waku + Codex nodes
+/// instead of spinning up its own.
+///
+/// Explicit `--transport` / `--storage` flags always win; this only
+/// fires when the user left those at their compiled defaults.
+pub fn apply_logos_core_defaults(cli: &mut Cli) {
+    if !logos_core_bindings::is_real_build() {
+        return;
+    }
+    if std::env::var("LOGOS_INSTANCE_ID").is_err() {
+        return;
+    }
+    if cli.transport == TransportKind::default() {
+        cli.transport = TransportKind::DeliveryModule;
+    }
+    if cli.storage == StorageKind::None {
+        cli.storage = StorageKind::StorageModule;
+    }
+}
+
 /// Boot the shim. The module name is what the LogosAPI registry shows
 /// for this consumer in logs — using the binary name keeps Basecamp's
 /// own log streams readable when both sides are running.

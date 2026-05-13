@@ -31,7 +31,7 @@
 //! or for storage upload progress), fan them out from this single
 //! poll loop rather than spawning a second one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -60,12 +60,45 @@ const POLL_TIMEOUT_MS: i32 = 250;
 
 type SubMap = Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>>;
 
+/// Bounded LRU cache of recently-seen message hashes used to deduplicate
+/// the N copies of each message that Waku emits (one per pubsub mesh topic).
+struct SeenCache {
+    hashes: HashSet<String>,
+    order: VecDeque<String>,
+    cap: usize,
+}
+
+impl SeenCache {
+    fn new(cap: usize) -> Self {
+        Self { hashes: HashSet::new(), order: VecDeque::new(), cap }
+    }
+
+    /// Returns `true` if the hash was not previously seen (i.e. should be forwarded).
+    fn insert(&mut self, hash: &str) -> bool {
+        if self.hashes.contains(hash) {
+            return false;
+        }
+        if self.hashes.len() >= self.cap {
+            if let Some(old) = self.order.pop_front() {
+                self.hashes.remove(&old);
+            }
+        }
+        self.hashes.insert(hash.to_owned());
+        self.order.push_back(hash.to_owned());
+        true
+    }
+}
+
+type SeenMap = Arc<Mutex<SeenCache>>;
+
 /// Transport that drives Basecamp's `delivery_module`.
 pub struct DeliveryModuleTransport {
     shim: Arc<Shim>,
     subscriptions: SubMap,
     /// Held to signal the poll task to exit on Drop.
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    #[allow(dead_code)]
+    seen: SeenMap,
 }
 
 impl DeliveryModuleTransport {
@@ -84,13 +117,26 @@ impl DeliveryModuleTransport {
         let setup = tokio::task::spawn_blocking(move || -> Result<()> {
             let create_args = serde_json::to_string(&serde_json::json!([cfg_owned]))
                 .map_err(|e| TransportError::Transport(format!("createNode args: {e}")))?;
-            let resp = call(&backend, "createNode", &create_args, STARTUP_TIMEOUT_MS)?;
-            // delivery_module's createNode returns a plain `bool` —
-            // serialised as either `true` or an error object.
-            check_bool(&resp, "createNode")?;
-
-            let resp = call(&backend, "start", "[]", STARTUP_TIMEOUT_MS)?;
-            check_bool(&resp, "start")?;
+            let create_resp = call(&backend, "createNode", &create_args, STARTUP_TIMEOUT_MS)?;
+            let node_already_existed = error_message(&create_resp).is_some();
+            if !node_already_existed {
+                check_bool(&create_resp, "createNode")?;
+            }
+            // Always call start() regardless of whether the node was just created or
+            // already existed. If the node was freshly created this starts it; if the
+            // node existed and is already running, delivery_module will return an error
+            // that we suppress (the node is operational). delivery_module does not
+            // support restart-after-stop, so a stopped-and-can't-restart node will also
+            // return an error here; we suppress that too and let the first send/subscribe
+            // surface the real failure — trying to distinguish is not worth the complexity.
+            let start_resp = call(&backend, "start", "[]", STARTUP_TIMEOUT_MS)?;
+            if let Some(err) = error_message(&start_resp) {
+                if !node_already_existed {
+                    // Freshly created node failed to start — surface the error.
+                    return Err(TransportError::Transport(format!("start: {err}")));
+                }
+                tracing::debug!("delivery_module start() on existing node: {err} (suppressed)");
+            }
 
             backend
                 .listen(MODULE, EVENT_MESSAGE_RECEIVED)
@@ -102,10 +148,12 @@ impl DeliveryModuleTransport {
         setup?;
 
         let subscriptions: SubMap = Arc::new(Mutex::new(HashMap::new()));
+        let seen: SeenMap = Arc::new(Mutex::new(SeenCache::new(1024)));
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let poll_shim = shim.clone();
         let poll_subs = subscriptions.clone();
+        let poll_seen = seen.clone();
         tokio::task::spawn_blocking(move || {
             loop {
                 // Cheap, non-blocking shutdown check.
@@ -116,7 +164,7 @@ impl DeliveryModuleTransport {
                 }
                 match poll_shim.poll_event(POLL_TIMEOUT_MS) {
                     Ok(None) => continue,
-                    Ok(Some(json)) => dispatch_event(&json, &poll_subs),
+                    Ok(Some(json)) => dispatch_event(&json, &poll_subs, &poll_seen),
                     Err(e) => {
                         tracing::warn!(error = %e, "delivery_module poll_event error; backing off");
                         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -129,6 +177,7 @@ impl DeliveryModuleTransport {
             shim,
             subscriptions,
             shutdown_tx: Some(shutdown_tx),
+            seen,
         })
     }
 }
@@ -144,11 +193,11 @@ impl Drop for DeliveryModuleTransport {
 #[async_trait]
 impl Transport for DeliveryModuleTransport {
     async fn publish(&self, topic: &str, payload: &[u8]) -> Result<()> {
-        let payload_b64 = B64.encode(payload);
+        let payload_str = String::from_utf8_lossy(payload).into_owned();
         let topic = topic.to_owned();
         let backend = self.shim.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let args = serde_json::to_string(&serde_json::json!([topic, payload_b64]))
+            let args = serde_json::to_string(&serde_json::json!([topic, payload_str]))
                 .map_err(|e| TransportError::Transport(format!("send args: {e}")))?;
             let resp = call(&backend, "send", &args, SHORT_TIMEOUT_MS)?;
             // QExpected<QString>: success → {"value": "<hash>"}, error → {"error": ...}
@@ -241,7 +290,11 @@ fn check_bool(v: &Value, method: &str) -> Result<()> {
 /// Parse one event envelope from the shim and forward the payload to
 /// the matching topic subscriber. Silently drops malformed envelopes
 /// — they're a protocol bug, not something the application can fix.
-fn dispatch_event(json: &str, subs: &SubMap) {
+///
+/// Waku emits one `messageReceived` per pubsub mesh topic the node is
+/// subscribed to, so the same application-level message arrives many
+/// times. We deduplicate by `messageHash` (data[0]).
+fn dispatch_event(json: &str, subs: &SubMap, seen: &SeenMap) {
     let Ok(env) = serde_json::from_str::<Value>(json) else {
         return;
     };
@@ -252,9 +305,14 @@ fn dispatch_event(json: &str, subs: &SubMap) {
         return;
     };
     // Shape: [messageHash, contentTopic, payload_b64, timestampStr]
+    let hash = data.get(0).and_then(Value::as_str).unwrap_or("");
     let topic = data.get(1).and_then(Value::as_str).unwrap_or("");
     let payload_b64 = data.get(2).and_then(Value::as_str).unwrap_or("");
     if topic.is_empty() {
+        return;
+    }
+    // Deduplicate: drop copies of a message we already forwarded.
+    if !hash.is_empty() && !seen.lock().unwrap().insert(hash) {
         return;
     }
     let Ok(payload) = B64.decode(payload_b64) else {
@@ -318,9 +376,14 @@ mod tests {
         assert!(err.to_string().contains("bad cfg"));
     }
 
+    fn make_seen() -> SeenMap {
+        Arc::new(Mutex::new(SeenCache::new(64)))
+    }
+
     #[tokio::test]
     async fn dispatch_event_forwards_payload_to_matching_topic() {
         let subs: SubMap = Arc::new(Mutex::new(HashMap::new()));
+        let seen = make_seen();
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
         subs.lock().unwrap().insert("/x/1/foo/proto".into(), tx);
 
@@ -331,7 +394,7 @@ mod tests {
             "data": ["msghash", "/x/1/foo/proto", payload_b64, "1700000000000"],
         })
         .to_string();
-        dispatch_event(&envelope, &subs);
+        dispatch_event(&envelope, &subs, &seen);
 
         let got = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
             .await
@@ -341,8 +404,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_event_deduplicates_same_hash() {
+        let subs: SubMap = Arc::new(Mutex::new(HashMap::new()));
+        let seen = make_seen();
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
+        subs.lock().unwrap().insert("/x/1/foo/proto".into(), tx);
+
+        let payload_b64 = B64.encode(b"hello");
+        let envelope = serde_json::json!({
+            "module": "delivery_module",
+            "event": "messageReceived",
+            "data": ["samehash", "/x/1/foo/proto", payload_b64, "1700000000000"],
+        })
+        .to_string();
+        dispatch_event(&envelope, &subs, &seen);
+        dispatch_event(&envelope, &subs, &seen); // duplicate — must be dropped
+
+        // Only one message should arrive.
+        let got = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+            .await
+            .expect("first should arrive")
+            .expect("channel still open");
+        assert_eq!(got, b"hello");
+        let second = tokio::time::timeout(std::time::Duration::from_millis(20), rx.recv()).await;
+        assert!(second.is_err(), "duplicate must be dropped");
+    }
+
+    #[tokio::test]
     async fn dispatch_event_ignores_unsubscribed_topic() {
         let subs: SubMap = Arc::new(Mutex::new(HashMap::new()));
+        let seen = make_seen();
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
         subs.lock().unwrap().insert("/x/1/foo/proto".into(), tx);
 
@@ -352,7 +443,7 @@ mod tests {
             "data": ["msghash", "/x/1/other/proto", B64.encode(b"ignored"), "0"],
         })
         .to_string();
-        dispatch_event(&envelope, &subs);
+        dispatch_event(&envelope, &subs, &seen);
 
         let res = tokio::time::timeout(std::time::Duration::from_millis(20), rx.recv()).await;
         assert!(res.is_err(), "no message expected for unsubscribed topic");
@@ -361,19 +452,21 @@ mod tests {
     #[test]
     fn dispatch_event_silently_drops_non_message_event() {
         let subs: SubMap = Arc::new(Mutex::new(HashMap::new()));
+        let seen = make_seen();
         let envelope = serde_json::json!({
             "module": "delivery_module",
             "event": "connectionStateChanged",
             "data": ["connected", "0"],
         })
         .to_string();
-        dispatch_event(&envelope, &subs); // no panic, no subscriber, no crash
+        dispatch_event(&envelope, &subs, &seen); // no panic, no subscriber, no crash
     }
 
     #[test]
     fn dispatch_event_silently_drops_malformed_envelope() {
         let subs: SubMap = Arc::new(Mutex::new(HashMap::new()));
-        dispatch_event("not-json", &subs);
-        dispatch_event(r#"{"module":"delivery_module"}"#, &subs);
+        let seen = make_seen();
+        dispatch_event("not-json", &subs, &seen);
+        dispatch_event(r#"{"module":"delivery_module"}"#, &subs, &seen);
     }
 }

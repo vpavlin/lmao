@@ -3,7 +3,8 @@
 //! Provides a unified [`Transport`] trait with multiple backend implementations:
 //!
 //! - **REST** (`rest` feature): nwaku REST API transport for communicating with a running nwaku node.
-//! - **Logos Core** (`logos-core` feature): native IPC transport via the Logos Core `delivery_module` plugin.
+//! - **Logos Delivery** (`logos-delivery` feature): embedded Waku node via liblogosdelivery FFI.
+//! - **Delivery Module** (`delivery-module` feature): Basecamp's `delivery_module` via the LogosAPI shim.
 //! - **In-memory**: zero-dependency mock transport for testing (`memory` module, always available).
 //!
 //! The [`sds`] submodule implements the SDS (Scalable Data Sync) reliability layer on top of
@@ -36,13 +37,6 @@ pub mod memory;
 pub mod nwaku_rest;
 pub mod sds;
 
-#[cfg(feature = "logos-core")]
-mod logos_core;
-#[cfg(feature = "logos-core")]
-pub mod logos_core_transport;
-#[cfg(feature = "logos-core")]
-pub use logos_core_transport::LogosCoreDeliveryTransport;
-
 #[cfg(feature = "logos-delivery")]
 pub mod logos_delivery;
 #[cfg(feature = "logos-delivery")]
@@ -60,11 +54,10 @@ pub use delivery_module_transport::DeliveryModuleTransport;
 ///
 /// Implementations:
 /// - `LogosDeliveryTransport`: embedded Logos Messaging node via
-///   liblogosdelivery FFI (`logos-delivery` feature) — the production default
-/// - `LogosMessagingTransport`: nwaku REST API (`rest` feature) — fallback
-///   when an external nwaku node is preferred
-/// - `LogosCoreDeliveryTransport`: Logos Core IPC via delivery_module
-///   (`logos-core` feature)
+///   liblogosdelivery FFI (`logos-delivery` feature)
+/// - `LogosMessagingTransport`: nwaku REST API (`rest` feature)
+/// - `DeliveryModuleTransport`: Basecamp's `delivery_module` via the
+///   LogosAPI shim (`delivery-module` feature) — logos-core-native path
 /// - `InMemoryTransport`: in-process mock for testing (no external deps)
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {

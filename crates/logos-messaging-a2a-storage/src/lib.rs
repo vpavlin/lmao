@@ -1,12 +1,13 @@
 //! Storage backend abstraction for Logos Messaging A2A.
 //!
 //! Provides a [`StorageBackend`] trait for uploading/downloading binary payloads
-//! and two concrete implementations:
+//! and concrete implementations:
 //!
 //! | Backend | Feature flag | When to use |
 //! |---------|-------------|-------------|
 //! | [`LogosStorageRest`] | `rest` (default) | Standalone processes talking to a Codex REST API |
-//! | `LogosCoreStorageBackend` | `logos-core` | Inside a Logos Core host process (desktop client) |
+//! | `LibstorageBackend` | `libstorage` | Embedded Codex node via libstorage FFI |
+//! | `StorageModuleBackend` | `storage-module` | Basecamp's `storage_module` via LogosAPI shim |
 //!
 //! # Example (REST)
 //!
@@ -26,13 +27,6 @@
 //! # Ok(())
 //! # }
 //! ```
-
-#[cfg(feature = "logos-core")]
-mod logos_core;
-#[cfg(feature = "logos-core")]
-mod logos_core_backend;
-#[cfg(feature = "logos-core")]
-pub use logos_core_backend::LogosCoreStorageBackend;
 
 #[cfg(feature = "libstorage")]
 mod libstorage_backend;

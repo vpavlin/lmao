@@ -49,7 +49,14 @@ async fn main() -> Result<()> {
         );
     }
 
-    let cli = Cli::parse();
+    #[allow(unused_mut)]
+    let mut cli = Cli::parse();
+    // When running inside a logos_host (LOGOS_INSTANCE_ID is set), prefer
+    // the shim backends so this process shares the host's Waku + Codex
+    // nodes instead of spinning up its own. Explicit --transport / --storage
+    // flags on the command line override this.
+    #[cfg(feature = "shim")]
+    shim::apply_logos_core_defaults(&mut cli);
     let json = cli.json;
     let identity = IdentityConfig {
         keyfile: cli.keyfile.clone(),

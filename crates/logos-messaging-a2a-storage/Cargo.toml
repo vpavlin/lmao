@@ -7,7 +7,6 @@ description = "Storage backend trait and Logos Storage (Codex) REST implementati
 [features]
 default = ["rest"]
 rest = ["reqwest"]
-logos-core = ["dep:base64"]
 libstorage = ["dep:storage-bindings", "dep:tempfile"]
 # Storage backend that calls Basecamp's `storage_module` via the Logos
 # C++ SDK (through `logos-core-bindings`). Mutually compatible with the
@@ -34,5 +33,12 @@ tempfile = { version = "3", optional = true }
 logos-core-bindings = { path = "../logos-core-bindings", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 wiremock = "0.6"
+tempfile = "3"
+serde_json = { version = "1" }
+
+[[test]]
+name = "storage_module_integration"
+path = "tests/storage_module_integration.rs"
+required-features = ["storage-module"]

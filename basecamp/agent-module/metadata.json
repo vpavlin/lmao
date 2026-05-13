@@ -7,7 +7,7 @@
   "interface": "universal",
   "category": "agents",
   "main": "agent_plugin",
-  "dependencies": [],
+  "dependencies": ["delivery_module", "storage_module"],
   "include": [],
   "capabilities": [],
   "nix": {
