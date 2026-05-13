@@ -22,6 +22,7 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QMetaObject>
+#include <QMetaType>
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
@@ -208,6 +209,16 @@ LogosShim* logos_shim_new(const char* module_name) {
 
         QCoreApplication app(g_qt_argc, g_qt_argv);
         app.setApplicationName(QStringLiteral("logos_shim"));
+
+        // Register LogosResult and its QDataStream operators so that cross-
+        // process QtRO can deserialize delivery_module replies. Without this,
+        // Qt prints "Trying to construct an instance of an invalid type, type
+        // id: <N>" when the remote process sends a QVariant(LogosResult) —
+        // because the integer type ID is process-local and "LogosResult" is
+        // not yet in this process's type registry. Calling qRegisterMetaType
+        // here registers the name + operators from liblogos_sdk.a so that
+        // QMetaType::fromName("LogosResult") works in this process.
+        qRegisterMetaType<LogosResult>("LogosResult");
 
         LogosModeConfig::setMode(LogosMode::Remote);
         LogosAPI api(QString::fromStdString(mn));

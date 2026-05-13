@@ -17,6 +17,17 @@ use logos_messaging_a2a_transport::{DeliveryModuleTransport, Transport};
 use logos_core_bindings::Shim;
 use std::sync::Arc;
 
+/// Generate a unique topic suffix based on the current timestamp so that
+/// successive test runs against a long-lived delivery_module node never
+/// accumulate stale subscriptions on the same topic.
+fn unique_topic(prefix: &str) -> String {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{prefix}/{ts}")
+}
+
 /// Returns `(shim, delivery_cfg_json)` when the environment is suitable for
 /// a shim integration test, or prints a skip message and returns `None`.
 fn require_shim_env() -> Option<(Arc<Shim>, String)> {
@@ -60,7 +71,8 @@ async fn publish_subscribe_roundtrip() {
         .await
         .expect("DeliveryModuleTransport::new failed");
 
-    let topic = "/lmao/test/shim-roundtrip/1";
+    let topic = unique_topic("/lmao/test/shim-roundtrip");
+    let topic = topic.as_str();
     let payload = b"hello from shim integration test";
 
     let mut rx = transport.subscribe(topic).await.expect("subscribe failed");
@@ -88,7 +100,8 @@ async fn publish_multiple_messages_received_in_order() {
         .await
         .expect("DeliveryModuleTransport::new failed");
 
-    let topic = "/lmao/test/shim-multi/1";
+    let topic = unique_topic("/lmao/test/shim-multi");
+    let topic = topic.as_str();
     let mut rx = transport.subscribe(topic).await.expect("subscribe failed");
 
     transport.publish(topic, b"first").await.expect("publish 1 failed");
@@ -119,7 +132,8 @@ async fn unsubscribe_stops_delivery() {
         .await
         .expect("DeliveryModuleTransport::new failed");
 
-    let topic = "/lmao/test/shim-unsub/1";
+    let topic = unique_topic("/lmao/test/shim-unsub");
+    let topic = topic.as_str();
     let mut rx = transport.subscribe(topic).await.expect("subscribe failed");
     transport.unsubscribe(topic).await.expect("unsubscribe failed");
 
@@ -153,10 +167,15 @@ async fn delivery_module_diagnostic() {
     let methods = shim.call("delivery_module", "getPluginMethods", "[]", 10_000);
     eprintln!("getPluginMethods: {:?}", methods);
 
-    // Try createNode directly
+    // Try createNode + start directly (must start the node so subsequent tests
+    // don't see an unstarted node and crash when calling send).
     let create_args = serde_json::to_string(&serde_json::json!([cfg])).unwrap();
     let result = shim.call("delivery_module", "createNode", &create_args, 30_000);
     eprintln!("createNode (direct): {:?}", result);
+    // Always call start() — if node was just created this starts it; if it
+    // already existed and is running, delivery_module returns an error we ignore.
+    let start_result = shim.call("delivery_module", "start", "[]", 120_000);
+    eprintln!("start (direct): {:?}", start_result);
 
     // Try callRemoteMethod(authToken, methodName, argsJson) — the ModuleProxy dispatch path.
     // authToken="" (no token), methodName="createNode", args=[cfg].
